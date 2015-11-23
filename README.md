@@ -1,0 +1,1 @@
+Convert SVGs client side to JPGs, PDFs and PNGs.
