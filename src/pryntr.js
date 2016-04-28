@@ -1,643 +1,973 @@
-/** @preserve
- * pryntr - Download SVG documents in PDF, JPG or SVG.
- * Version 0.0
- *
- * Copyright (c) 2015 AureusAnalytics, https://github.com/AureusAnalytics
- *
- * Permission is hereby granted, free of charge, to any person obtaining
- * a copy of this software and associated documentation files (the
- * "Software"), to deal in the Software without restriction, including
- * without limitation the rights to use, copy, modify, merge, publish,
- * distribute, sublicense, and/or sell copies of the Software, and to
- * permit persons to whom the Software is furnished to do so, subject to
- * the following conditions:
- *
- * The above copyright notice and this permission notice shall be
- * included in all copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
- * EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
- * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
- * NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE
- * LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
- * OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
- * WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
- *
- */
+/*
+* pryntr.js
+*
+* SVGs from DOM to SVG, JPG, PNG downloads 
+* TODO Add PDF conversion and download
+*
+* @version 0.0.2
+* @date 22-3-2016
+* @author raj bhadra
+*
+* @license
+* Copyright (C) 2016 Aureus Analytics <raj@aureusanalytics.com>
+*
+* Permission is hereby granted, free of charge, to any person obtaining
+* a copy of this software and associated documentation files (the
+* "Software"), to deal in the Software without restriction, including
+* without limitation the rights to use, copy, modify, merge, publish,
+* distribute, sublicense, and/or sell copies of the Software, and to
+* permit persons to whom the Software is furnished to do so, subject to
+* the following conditions:
+*
+* The above copyright notice and this permission notice shall be
+* included in all copies or substantial portions of the Software.
+*
+* THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+* EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+* MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+* NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE
+* LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+* OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
+* WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+*
+*/
+
+window.pryntr = (function(){
+
+	var consts = {
+		defaultType: "svg",
+		defaultSelector: "svg",
+	};
+
+	function Pryntr(){
+		this.consts = consts;
+	}
+
+	/**
+	* Print/Download the SVGs specified by the selectors
+	* @param {String|Array.<String>} [selectors=["svg"]] The selectors for the elements to be printed
+	* @param {String} [type="svg"] The type of download expected
+	*/
+	Pryntr.prototype.prynt = function(selectors, type){
+		type = typeof type !== "string"? this.consts.defaultType: type;
+		selectors = typeof selectors === "undefined"? [this.consts.defaultSelector]: selectors;
+		selectors = typeof selectors === "string" || typeof selectors.length !== "number"? [selectors]: selectors;
+		var sugarSerializer = this.SVGSerializer.getSugarSerializer();
+		var cssWrangler = this.cssWrangler.getWrangler();
+		var rasterizer = this.rasterize.getRasterizer();
+		var downloader = this.downloader.getDownloader(rasterizer);
+		var styles = cssWrangler.getStylesString();
+		var sources = sugarSerializer.getSugaryInfos(selectors, styles);
+		sources.length > 0? downloader.download(sources, type):undefined;
+	};
+
+	/**
+	* Expose the available download types
+	* @return {Array.<String>} The available download types
+	*/
+	Pryntr.prototype.canPrynt = function(){
+		var downloader = this.downloader.getDownloader();
+		return downloader.canDownload();
+	};
+
+	/**
+	* Download sources directly
+	* @param {String|Array.<String>} The sources to be downloaded
+	* @param {String} type The mimeType of the source
+	*/
+	Pryntr.prototype.pryntSources = function(sources, type){
+		sources = typeof sources === "string"? [sources]: sources;
+		var downloader = this.downloader.getDownloader();
+		downloader.sourceDownloader(sources, true, type);
+	};
+
+	/**
+	* Module for downloading the SVG sources in SVG, PDF+Layout & JPG
+	*/
+	Pryntr.prototype.downloader = (function(){
+
+		function Downloader(rasterizer){
+			this.rasterizer = rasterizer;
+		};
+
+		/**
+		* Expose the available download types
+		* @return {Array.<String>} The available download types
+		*/
+		Downloader.prototype.canDownload = function(){
+			return ["svg", "jpg", "png"];
+		};
+
+		/**
+		* Download sources according to the downloadType specified
+		* @param {Object|Array.<Object>} The sources to be downloaded
+		* @param {String} downloadType The download type specified
+		*/
+		Downloader.prototype.download = function(sources, downloadType){
+			downloadType = downloadType.toLowerCase();
+			if (downloadType === "svg"){
+				this.SVGDownloader(sources);
+			}
+			else if(downloadType === "jpg"){
+				this.JPGDownloader(sources);
+			}
+			else if(downloadType === "png"){
+				this.PNGDownloader(sources);
+			}
+			else if (downloadType === "pdf"){
+				this.PDFDownloader(sources);
+			}
+			else{
+				console.log("The download type " + downloadType + " is not supported");
+			}
+		};
+
+		/**
+		* Generate file name from source object
+		* @param {Object} [source] The source object
+		* @param {Number} [index] The source index
+		* @param {String} [downloadType="zip"] The download type specified
+		* @return {String} The filename for the zip or individual files inside zip or independent
+		*/
+		Downloader.prototype.getFileName = function(source, index, downloadType){
+			var name = typeof index === "number"? ("Chart_" + String(index)): "Pulse_Downloads";
+			var extension = typeof downloadType === "string"? downloadType.toLowerCase(): "zip";
+			return name + "." + extension;
+		};
+
+		/**
+		* Generate a new zipper
+		* @return {Object} A zipper Object
+		*/
+		Downloader.prototype.zipper = function(){
+			return new JSZip();
+		};
+
+		/**
+		* Generate a new pdf Document
+		* @return {Object} A pdf document
+		*/
+		Downloader.prototype.pdfDoc = function(){
+			return new jsPDF();
+		};
+
+		/**
+		* Add a new file to the zipper
+		* @param {Object} zipper The zipper Object
+		* @param {String} name The file name
+		* @param {String} content The file contents
+		* @param {Object} options The file options
+		*/
+		Downloader.prototype.addToZip = function(zipper, name, content, options){
+			typeof options === "object"? zipper.file(name, content, options): zipper.file(name, content);
+		};
+
+		/**
+		* Add sources to a zip object
+		* @param {Object|Array.<Object>} sources The sources for zipping
+		* @param {Object} zipper The zipper object in which the source/s are to be added
+		* @param {String} downloadType The download type for the sources
+		* @param {Object} options The options for adding the file to zipper
+		*/
+		Downloader.prototype.addSourcesToZip = function(sources, zipper, downloadType, options){
+			if (typeof sources.length !== "number"){
+				sources = [sources];
+			}
+			for (var i = 0; i < sources.length; i++){
+				var source = sources[i];
+				source = typeof source === "string"? source: source.source;
+				if (typeof source === "string"){
+					var name = this.getFileName(source, i, downloadType);
+					this.addToZip(zipper, name, source, options);
+				}
+			}
+		};
+
+		/**
+		* Get a zipper object to download in the browser
+		* @param {Object} zipper The zipper object
+		*/
+		Downloader.prototype.getZip = function(zipper){
+			var name = this.getFileName();
+			var blob = zipper.generate({type: "blob"});
+			saveAs(blob, name);
+		};
+
+		/**
+		* Transform the sources to suit the target MIME
+		* @param {Object|Array.<Object>} The SVG sources to download
+		* @param {String} sourceMIME The MIME type for the source
+		* @param {String} targetMIME The MIME type expected for the target
+		* @return {Array.<Object>} The SVG sources in the target format
+		*/
+		Downloader.prototype.transformSources = function(sources, sourceMIME, targetMIME){
+			if (typeof sources.length !== "number"){
+				sources = [sources];
+			}
+			if (sourceMIME !== targetMIME){
+				for (var i = 0; i < sources.length; i++){
+					var source = sources[i];
+					if (typeof source.source === "string"){
+						source.source = this.rasterizer.transformSource(source.source, sourceMIME, targetMIME);
+					}
+				}
+			}
+		};
+
+		Downloader.prototype.sourceDownloader = function(sources, toZip, format){
+			if (typeof sources.length !== "number"){
+				sources = [sources];
+			}
+			var zipper = this.zipper();
+			this.addSourcesToZip(sources, zipper, format);
+			this.getZip(zipper);
+		};
+
+		/**
+		* Browser download of SVG/s source in SVG format
+		* @param {Object|Array.<Object>} The SVG sources to download
+		* @param {Boolean} [toZip=true] True if the contents are to be zipped
+		*/
+		Downloader.prototype.SVGDownloader = function(sources, toZip){
+			if (typeof sources.length !== "number"){
+				sources = [sources];
+			}
+			var zipper = this.zipper();
+			this.addSourcesToZip(sources, zipper, "svg");
+			this.getZip(zipper);
+		};
+
+		/**
+		* Browser download of SVG/s source in JPG format
+		* @param {Object|Array.<Object>} The SVG sources to download
+		* @param {Boolean} [toZip=true] True if the contents are to be zipped
+		*/
+		Downloader.prototype.JPGDownloader = function(sources, toZip){
+			if (typeof this.rasterizer !== "undefined"){
+				if (typeof sources.length !== "number"){
+					sources = [sources];
+				}
+				this.transformSources(sources, "image/svg+xml", "image/jpeg");
+				var zipper = this.zipper();
+				this.addSourcesToZip(sources, zipper, "jpg", {base64: true});
+				this.getZip(zipper);
+			}
+		};
+
+		/**
+		* Browser download of SVG/s source in PNG format
+		* @param {Object|Array.<Object>} The SVG sources to download
+		* @param {Boolean} [toZip=true] True if the contents are to be zipped
+		*/
+		Downloader.prototype.PNGDownloader = function(sources, toZip){
+			if (typeof this.rasterizer !== "undefined"){
+				if (typeof sources.length !== "number"){
+					sources = [sources];
+				}
+				this.transformSources(sources, "image/svg+xml", "image/png");
+				var zipper = this.zipper();
+				this.addSourcesToZip(sources, zipper, "png", {base64: true});
+				this.getZip(zipper);
+			}
+		};
+
+		/**
+		* Browser download + layout of SVG/s source in PDF format
+		* @param {Object|Array.<Object>} The SVG sources to download
+		* @param {Boolean} [toZip=true] True if the contents are to be zipped
+		*/
+		Downloader.prototype.PDFDownloader = function(sources, toZip){
+			console.log("I'm responsible for downloading PDF");
+		};
+
+		var downloader = {
+			getDownloader: function(rasterizer){
+				return new Downloader(rasterizer);
+			}
+		};
+
+		return downloader;
+
+	}());
+
+	/**
+	* Calculate the positioning of rects in pages
+	*/
+	Pryntr.prototype.layoutEngine = (function(){
+
+		var consts = {};
+		var conf = {};
+
+		function LayoutEngine(){
+			this.consts = consts;
+			this.conf = conf;
+		}
+
+		var layoutEngine = {
+			getLayer: function(){
+				return new LayoutEngine(conf);
+			}
+		};
+
+	});
+
+	/**
+	* Module for converting vector SVG into JPEG by rendering it onto a canvas and ripping it back
+	*/
+	Pryntr.prototype.rasterize = (function(){
+
+		var consts = {
+			svgMIME: "image/svg+xml",
+		};
+
+		function Rasterize(){
+			this.consts = consts;
+		};
+
+		/**
+		* Convert a vector source to another format
+		* @param {String} source The source string
+		* @param {String} sourceMIME The MIME type for the source
+		* @param {String} targetMIME The MIME type for the target
+		* @return {String} The b64 encoded transformed source(Not in URI scheme)
+		*/
+		Rasterize.prototype.transformSource = function(source, sourceMIME, targetMIME){
+			var sourceScheme = this.mimeToScheme(sourceMIME);
+			var targetScheme = this.mimeToScheme(targetMIME);
+			var img = this.sourceToImage(source, sourceScheme);
+			var canvas = this.imgToCanvas(img);
+			var sourceURI = this.canvasToURI(canvas, targetMIME);
+			var source = this.sliceURI(sourceURI, targetScheme);
+			return source;
+		};
+
+		/**
+		* Paint in image element on a canvas
+		* @param {Object} img A HTML image object
+		* @return {Object} A HTML canvas object with the image painted on it
+		*/
+		Rasterize.prototype.imgToCanvas = function(img){
+			var canvas = document.createElement("canvas");
+			canvas.width = img.width;
+			canvas.height = img.height;
+			var ctx = canvas.getContext("2d");
+			ctx.rect(0, 0, canvas.width, canvas.height);
+			ctx.fillStyle = "white";
+			ctx.fill();
+			ctx.drawImage(img, 0, 0);
+			return canvas;
+		};
+
+		/**
+		* Rip off the canvas content
+		* @param {Object} canvas The canvas which has to be ripped
+		* @param {String} type The type of ripping image/jpg, image/
+		*/
+		Rasterize.prototype.canvasToURI = function(canvas, type){
+			return (canvas.toDataURL(type)).toString();
+		};
+
+		/**
+		* Slice the Data URI scheme off
+		* @param {String} uriString The jpegURI string
+		* @param {String} mimeScheme The mime Scheme string
+		* @return {String} The string without the URI scheme
+		*/
+		Rasterize.prototype.sliceURI = function(uriString, mimeScheme){
+			return uriString.slice((mimeScheme).length);
+		};
+
+		/**
+		* Convert String to base64, escape Unicode characters
+		* Use 
+		* @param {String} binaryString The binary string 16 bit DOM string
+		* @return {String} The base64 ASCII conversion for the string 8 bit ASCII string
+		*/
+		Rasterize.prototype.toBase64 = function(binaryString){
+			return btoa(unescape(encodeURIComponent(binaryString))); // Using the deprecated unescape method
+			//return btoa(decodeURIComponent(encodeURIComponent(binaryString))); // Using decodeURIComponent method
+/*			return btoa(encodeURIComponent(binaryString).replace(/%([0-9A-F]{2})/g, function(match, p1) { // Regex escaping
+				return String.fromCharCode('0x' + p1);
+			}));*/
+		};
+
+		/**
+		* Convert mimeType to URI Scheme
+		* @param {String} mimeType The mime
+		* @return {String} The mimeType
+		*/
+		Rasterize.prototype.mimeToScheme = function(mimeType){
+			return "data:" + mimeType + ";base64,";
+		};
+
+		/**
+		* Convert binary string to a data URI format
+		* @param {String} source The data binary string
+		* @param {String} mimeScheme The mime scheme string
+		* @param {String} The source binary to base64 ASCII in URI scheme
+		*/
+		Rasterize.prototype.stringToDataURI = function(source, mimeScheme){
+			return mimeScheme + this.toBase64(source); 
+		};
+
+		/**
+		* Add an image binary string to an img element as data URI
+		* @param {String} source The image binary string
+		* @param {String} mimeScheme The source mime uri scheme
+		* @return {Object} The img element with src as image data URI
+		*/
+		Rasterize.prototype.sourceToImage = function(source, mimeScheme){
+			return this.toImage(this.stringToDataURI(source, mimeScheme));
+		}
+
+		/**
+		* Create an image element with the specified source
+		* @param {String} imageSource The image source
+		* @return {Object} The img element with src as the source
+		*/
+		Rasterize.prototype.toImage = function(imageSource){
+			var img = new Image;
+			img.src = imageSource;
+			return img;
+		};
+
+		var raster = {
+			getRasterizer: function(){
+				return new Rasterize();
+			}
+		}
+
+		return raster;
 
 
-var getPDFFromSVGs = function(jsonString, conf) {
-                var processing = true;
-                var photos = JSON.parse(jsonString);
-                var config = JSON.parse(conf);
-                var defaultConfig = {downloadType: "PDF", oneOnAPage: false, vertical:"north", fontsize: 13, xpad: 10, ypad: 10, titleTop: true, fonttype:"", font:"times", favicon:""}
-                var pids = []
-                photos.forEach(function(photo){
-                    pids.push(photo["parentId"]);
-                });
-                var doc = new jsPDF();
-                //var imgDict = {};
-                var gloCount = photos.length;
-                pageHeight = doc.internal.pageSize.height;
-                pageWidth = doc.internal.pageSize.width;
+	}());
 
-                // console.log("Page width is " + pageWidth + ", and page height is " + pageHeight);
+	/**
+	* Module for sugary SVG serializing
+	* @return {Object} An object which has functions for sugary serializing a SVG
+	* TODO: fetch the css styling by getting appropriate styles from the browser and applying it inline
+	*/
+	Pryntr.prototype.SVGSerializer = (function(){
+		var consts = {
+			svgPrefix: {xmlns: "http://www.w3.org/2000/xmlns/", xlink: "http://www.w3.org/1999/xlink", svg: "http://www.w3.org/2000/svg"},
+			svgDoctype: '<?xml version="1.0" standalone="no"?><!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">',
+		};
 
-                // Load config
-                var favicon = config.favicon;
-                var fontsize = !isNaN(parseInt(config.fontsize))?parseInt(config.fontsize):(defaultConfig.fontsize);
-                var fonttype = config.fonttype == "bold" || config.fonttype == "italic" || config.fonttype == "bolditalic"?config.fonttype:defaultConfig.fonttype;
-                var font = config.font == "times" || config.font == "courier" || config.font == "helvetica"?config.font:defaultConfig.font;
-                var xpad = !isNaN(parseInt(config.xpad))?parseInt(config.xpad):(defaultConfig.xpad);
-                var ypad = !isNaN(parseInt(config.ypad))?parseInt(config.ypad):(defaultConfig.ypad);
-                var oneOnAPage = config.oneOnAPage == "true"?true:(config.oneOnAPage == "false"?false:defaultConfig.oneOnAPage);
-                var vertical = (config.vertical == "north" || config.vertical == "south" || config.vertical == "east" || config.vertical == "west")?config.vertical:defaultConfig.vertical;
-                var titleTop = config.titleTop == "true"?true:(config.titleTop == "false"?false:defaultConfig.titleTop);
-                var downloadType = config.downloadType == "PDF"?"PDF":(config.downloadType == "SVG"?"SVG":(config.downloadType == "JPG" || config.downloadType == "JPEG"?"JPG":defaultConfig.downloadType));
-                //console.log("The download type is " + downloadType + " fontsize is " + fontsize + " xpad is " + xpad);
-                var y = 0;
-                doc.setFontSize(fontsize);
-                doc.setFontType(config.fonttype);
-                doc.setFont(config.font);
-                // End of Load config
+		/**
+		* Sugary serialize a SVG
+		*/
+		function SugarSerializer(){
+			this.consts = consts;
+		};
 
-                function getVectorString(parentIds) {
-                  var results = {}
-                  parentIds.forEach(function(parentId){
-                    results[parentId] = "";
-                  })
-                  var doctype = '<?xml version="1.0" standalone="no"?><!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">';
+		/**
+		* Check if the element is a string, if yes consider it as a selector and fetch it
+		* @param {String|Object} element The element to be checked and/or fetched
+		* @return {Object} The Node element
+		*/
+		SugarSerializer.prototype.fetchIfSelector = function(element){
+			element = typeof element === "string"? this.getElement(element): element;
+			return element;
+		}
 
-                  window.URL = (window.URL || window.webkitURL);
+		/**
+		* Check if the element has a property whose value matches the expected value
+		* @param {String|Object} element The element to be checked
+		* @param {String} property The property of the element to be checked
+		* @param {String} expectedValue The expected value of the property
+		* @return {Boolean} True if the property value matches the expected value
+		*/
+		SugarSerializer.prototype.checkElementProperty = function(element, property, expectedValue){
+			var match = false;
+			element = this.fetchIfSelector(element);
+			if (typeof element === "object" && typeof element[property] !== "undefined"){
+				match = element[property] === expectedValue;
+			}
+			return match;
+		}
 
-                  var body = document.body;
+		/**
+		* Check if a Node has the tag name svg
+		* @param {String|Object} element The element on which SVG check is to be done
+		* @return {Boolean} True if the element is found and it is an svg
+		*/
+		SugarSerializer.prototype.isSVG = function(element){
+			element = this.fetchIfSelector(element);
+			return this.checkElementProperty(element, "tagName", "svg");
+		};
 
-                  var prefix = {
-                    xmlns: "http://www.w3.org/2000/xmlns/",
-                    xlink: "http://www.w3.org/1999/xlink",
-                    svg: "http://www.w3.org/2000/svg"
-                  }
+		/**
+		* Add a child node to the parent if it dosen't exist
+		* @param {String} parentSelector The selector for parent element
+		* @param {String} relativeChildSelector The relative selector for the child element
+		* @param {String} childType The element type of the child
+		* @param {Boolean} [addFirst=false] if adding to the first position on the parent
+		* @return {Object} The child element
+		*/
+		SugarSerializer.prototype.addChildIfNonExistent = function(parentSelector, relativeChildSelector, childType, addFirst){
+			var child = undefined;
+			addFirst = typeof addFirst === "boolean"? addFirst: false;
+			var fullChildSelector = this.generateFullChildSelector(parentSelector, relativeChildSelector, true);
+			if (this.elementExists(fullChildSelector) === false){
+				var parent = this.fetchIfSelector(parentSelector);
+				child = document.createElement(childType);
+				// Add last or first based on addFirst
+				addFirst === true? parent.insertBefore(child, parent.firstChild): parent.appendChild(child);
+			}
+			else{
+				child = this.fetchIfSelector(fullChildSelector);
+			}
+			return child;
+		};
 
-                  return initialize();
+		/**
+		* Check if a parent has a child with relative selector
+		* @param {String} parentSelector The selector of the parent element
+		* @param {String} relativeChildSelector The relative selector of the child element
+		* @return {Boolean} True if the parent has the child inside it
+		*/
+		SugarSerializer.prototype.childExists = function(parentSelector, relativeChildSelector){
+			var fullChildSelector = this.generateFullChildSelector(parentSelector, relativeChildSelector, true);
+			return this.elementExists(fullChildSelector);
+		};
 
-                  function initialize() {
-                    var documents = [window.document],
-                        SVGSources = [];
-                        iframes = document.querySelectorAll("iframe"),
-                        objects = document.querySelectorAll("object");
+		/**
+		* Add a child to the parent
+		* @param {String|Object} parent The selector of the parent element
+		* @param {String} childType The type of the child element to be appended
+		* @param {Boolean} [addFirst=false] If adding to the first position on the parent
+		*/
+		SugarSerializer.prototype.addChild = function(parentSelector, childType, addFirst){
+			var child = undefined;
+			addFirst = typeof addFirst === "boolean"? addFirst: false;
+			var parent = this.fetchIfSelector(parentSelector);
+			if (this.elementExists(parent) === true){
+				child = document.createElement(childType);
+				// Add last or first based on addFirst
+				addFirst === true? parent.insertBefore(child, parent.firstChild): parent.appendChild(child);
+			}
+			return child;
+		};
 
-                    [].forEach.call(iframes, function(el) {
-                      try {
-                        if (el.contentDocument) {
-                          documents.push(el.contentDocument);
-                        }
-                      } catch(err) {
-                        console.log(err)
-                      }
-                    });
+		/**
+		* Serialize an element to string
+		* @param {String|Object} element The element to be serialized
+		* @return {String} The serialized element
+		*/
+		SugarSerializer.prototype.serialize = function(element){
+			var serial = undefined;
+			var element = this.fetchIfSelector(element);
+			if (this.elementExists(element)){
+				serial = (new XMLSerializer()).serializeToString(element);
+			}
+			return serial;
+		};
 
-                    [].forEach.call(objects, function(el) {
-                      try {
-                        if (el.contentDocument) {
-                          documents.push(el.contentDocument);
-                        }
-                      } catch(err) {
-                        console.log(err)
-                      }
-                    });
+		/**
+		* Check if an element exists in the DOM
+		* @param {String|Object} element The element/selector
+		* @return {Boolean} True if the element is an object or the selector points to a DOM element
+		*/
+		SugarSerializer.prototype.elementExists = function(element){
+			var exists = false;
+			element = this.fetchIfSelector(element);
+			return typeof element === "object" && element !== null;
+		}
 
-                    documents.forEach(function(doc) {
-                      var styles = getStyles(doc);
-                      var newSources = getSources(doc, styles);
-                      // because of prototype on NYT pages
-                      for (var i = 0; i < newSources.length; i++) {
-                        SVGSources.push(newSources[i]);
-                      };
-                    })
-                    //console.log("The dtype is " + downloadType);
-                    if (downloadType == "SVG"){
-                        //console.log("Downloading in SVG type");
-                        downloadAll(SVGSources, "SVG");
-                        return null;
-                    }
-                    else if (downloadType == "JPG"){
-                        //console.log("Downloading in JPG type")
-                        downloadAll(SVGSources, "JPG");
-                        return null;
-                    }
-                    else{
-                        return SVGSources;
-                    }
-                    // if (SVGSources.length > 1) {
-                    //   createPopover(SVGSources);
-                    // } else if (SVGSources.length > 0) {
-                    //   download(SVGSources[0]);
-                    // } else {
-                    //   alert("Couldn’t find any SVG nodes.");
-                    // }
-                  }
+		/**
+		* Generate full child selector from parent selector and relative child selector
+		* @param {String} parentSelector The selector for the parent element
+		* @param {String} relativeChildSelector The relative child selector from the parent
+		* @param {Boolean} [direct=true] Generate direct child selector
+		* @return {String} The full child selector
+		*/
+		SugarSerializer.prototype.generateFullChildSelector = function(parentSelector, relativeChildSelector, direct){
+			direct = typeof direct === "boolean"? direct: true;
+			var connector = direct === true? " > ": " ";
+			return parentSelector + connector + relativeChildSelector;
+		}
 
-                  function getSources(doc, styles) {
-                    var svgInfo = [];
-                        //svgs = doc.querySelectorAll("svg");
-                    // var svgs = [];
-                    // parentIds.forEach(function(parentId){
-                    //   svgs.push(doc.querySelector("#" + parentId + "svg"));
-                    // });
+		/**
+		* Fetch an element from the DOM given a selector
+		* @param {String} selector The selector of the element to be fetched
+		* @return {Object} The Node
+		*/
+		SugarSerializer.prototype.getElement = function(selector){
+			var ele = document.querySelector(selector);
+			ele = ele === null? undefined: ele;
+			return ele;
+		};
 
+		/**
+		* Fetch elements matching the selectors
+		* @param {Array.<String|Object>} selectors The array of selectors
+		* @return {Array.<Object>} The array of elements corresponding to the selectors
+		*/
+		SugarSerializer.prototype.getElements = function(selectors){
+			var elements = [];
+			for (var i = 0; i < selectors.length; i++){
+				elements.push(this.fetchIfSelector(selectors[i]));
+			}
+			return elements;
+		}
 
-                    styles = (styles === undefined) ? "" : styles;
+		/**
+		* Get the clone of a DOM element
+		* @param {String|Object} element The selector/node of which a clone is desired
+		* @param {Boolean} [deep=true] If true, fetch a deep clone of the element
+		* @return {Object} The clone of the element
+		*/
+		SugarSerializer.prototype.getElementClone = function(element, deep){
+			element = this.fetchIfSelector(element);
+			deep = typeof deep === "boolean"? deep: true;
+			var clone = (typeof element === "object" && typeof element.cloneNode === "function")? element.cloneNode(deep): undefined;
+			return clone;
+		};
 
-                    [].forEach.call(parentIds, function (parentId) {
-                      svg = document.querySelector("#" + parentId + " svg")
-                      //console.log("Got svg as " + svg)
-                      svg.setAttribute("version", "1.1");
-                      svg.setAttribute("background", "")
-                      var defsEl = document.createElement("defs");
-                      svg.insertBefore(defsEl, svg.firstChild); //TODO   .insert("defs", ":first-child")
-                      // defsEl.setAttribute("class", "svg-crowbar");
+		/**
+		* Get the image sources and bounding box information
+		* @param {String|Array.<String>|Array.<Object>} elements The elements whose info is sought
+		* @param {String} styles The styles to be added to the source
+		* @return {Array.<Object>} The info objects containing sources and box infos
+		*/
+		SugarSerializer.prototype.getSugaryInfos = function(elements, styles){
+			var sources = [];
+			elements = typeof elements === "string"? [elements]: elements;
+			for (var i = 0; i < elements.length; i++){
+				if (this.isSVG(elements[i]) === true){
+					sources.push(this.getSugaryInfo(elements[i], styles));
+				}
+			}
+			return sources;
+		};
 
-                      var styleEl = document.createElement("style")
-                      defsEl.appendChild(styleEl);
-                      styleEl.setAttribute("type", "text/css");
+		/**
+		* Get the image source and bounding box information
+		* @param {String|Object} element The element whose info is sought
+		* @param {String} styles The styles to be added to the source
+		* @return {Object} The info object containing source and box info
+		*/
+		SugarSerializer.prototype.getSugaryInfo = function(element, styles){
+			var info = this.getBounds(element);
+			info["source"] = this.getSugarySource(element, styles);
+			return info;
+		};
 
+		/**
+		* Get the sugary and styled source of the svg
+		* @param {String|Object} element The svg element
+		* @param {String} [styles=""] The styles to be added to the svg
+		* @return {String} The sugared and styled source
+		*/
+		SugarSerializer.prototype.getSugarySource = function(element, styles){
+			var sugaryElement = this.getSugaryClone(element, styles);
+			var source = this.serialize(sugaryElement);
+			if (typeof source === "string"){
+				source = this.consts.svgDoctype + source;
+			}
+			return source;
+		};
 
-                      // removing attributes so they aren't doubled up
-                      svg.removeAttribute("xmlns");
-                      svg.removeAttribute("xlink");
+		/**
+		* Clone a svg and add sugar and style to it
+		* @param {String|Object} element The svg element
+		* @param {String} [styles=""] The styles to be added to the svg
+		* @return {Object} The sugared and styled clone
+		*/
+		SugarSerializer.prototype.getSugaryClone = function(element, styles){
+			var clone = undefined;
+			element = this.fetchIfSelector(element);
+			styles = typeof styles === "string"? styles: "";
+			if (this.isSVG(element) === true){
+				clone = this.getElementClone(element);
+				// Add Sugar, Style and everything nice
+				this.addSugarToSVG(clone);
+				this.addStyleToSVG(clone, styles);
+			}
+			return clone;
+		};
 
-                      // These are needed for the svg
-                      if (!svg.hasAttributeNS(prefix.xmlns, "xmlns")) {
-                        svg.setAttributeNS(prefix.xmlns, "xmlns", prefix.svg);
-                      }
+		/**
+		* Pop the innerText of an element
+		* @param {String|Object} element The element whose text is to be popped
+		* @param {String} The popped text
+		*/
+		SugarSerializer.prototype.popText = function(element){
+			element = this.fetchIfSelector(element);
+			var text = "";
+			if (this.elementExists(element) === true && typeof element.innerText === "string"){
+				text = element.innerText;
+				element.innerText = "";
+			}
+			return text;
+		}
 
-                      if (!svg.hasAttributeNS(prefix.xmlns, "xmlns:xlink")) {
-                        svg.setAttributeNS(prefix.xmlns, "xmlns:xlink", prefix.xlink);
-                      }
+		/**
+		* Append text to an element with prefix and suffix
+		* @param {String|Object} element The element whose text is to be appended
+		* @param {String} [textToAppend=""] The text append
+		* @param {String} [prefix=""] The prefix to append
+		* @param {String} [suffix=""] The suffix to append
+		*/
+		SugarSerializer.prototype.appendText = function(element, textToAppend, prefix, suffix){
+			element = this.fetchIfSelector(element);
+			if (this.elementExists(element) === true && typeof element.innerText === "string"){
+				var currentText = element.innerText;
+				prefix = typeof prefix === "string"? prefix: "";
+				suffix = typeof suffix === "string"? suffix: "";
+				textToAppend = typeof textToAppend === "string"? textToAppend: "";
+				element.innerText = currentText + prefix + textToAppend + suffix;
+			}
+		};
 
-                      var source = (new XMLSerializer()).serializeToString(svg).replace('</style>', '<![CDATA[' + styles + ']]></style>');
-                      // console.log("source is \n" + source)
-                      var rect = svg.getBoundingClientRect();
-                      svgInfo.push({
-                        top: rect.top,
-                        left: rect.left,
-                        width: rect.width,
-                        height: rect.height,
-                        class: svg.getAttribute("class"),
-                        id: svg.getAttribute("id"),
-                        childElementCount: svg.childElementCount,
-                        source: [doctype + source],
-                        pid: parentId
-                      });
-                    });
-                    return svgInfo;
-                  }
+		/**
+		* Append CDATA text to an element with prefix and suffix
+		* @param {String|Object} element The element on which the CDATA section is to be applied
+		* @param {String} [textToAppend=""] The text append
+		*/
+		SugarSerializer.prototype.addCDATASection = function(element, textToAppend){
+			element = this.fetchIfSelector(element);
+			textToAppend = typeof textToAppend === "string"? textToAppend: "";
+			if (this.elementExists(element) === true){
+				var doc = new DOMParser().parseFromString("<svg></svg>", "image/svg+xml");
+				var cdata = doc.createCDATASection(textToAppend);
+				element.appendChild(cdata);
+			}
+		};
 
-                  function download(source, type) {
-                    var filename = "untitled";
-                    var a = document.createElement("a");
-                    if (source.id) {
-                      filename = source.id;
-                    } else if (source.class) {
-                      filename = source.class;
-                    } else if (source.pid) {
-                      filename = source.pid;
-                    }else if (window.document.title) {
-                      filename = window.document.title.replace(/[^a-z0-9]/gi, '-').toLowerCase();
-                    }
-                    if (type == "SVG"){
-                        var url = window.URL.createObjectURL(new Blob(source.source, { "type" : "text\/xml" }));
-                        a.setAttribute("download", filename + ".svg");
-                    }
-                    else if (type == "JPG"){
-                        a.setAttribute("download", filename + ".jpg");
-                        //console.log("The filename is " + filename + ".jpg");
-                        var img = new Image, data, ret={data: null, pending: true};
-                        img.onError = function() {
-                                        throw new Error('Cannot load image: "'+url+'"');
-                        }
-                        htmlX = source.source;
-                        var imgsrcX = 'data:image/svg+xml;base64,' + btoa(htmlX);
-                        var imgX = '<img src="' + imgsrcX + '">';
-                        img.src = imgsrcX;
-                        var canvas = document.createElement('canvas');
-                        document.body.appendChild(canvas);
-                        canvas.width = source.width;
-                        canvas.height = source.height;
-                        var ctx = canvas.getContext('2d');
-                        ctx.rect(0,0,canvas.width,canvas.height);
-                        ctx.fillStyle="white";
-                        ctx.fill();
-                        ctx.drawImage(img, 0, 0);
-                    //    var url = window.URL.createObjectURL(new Blob(canvas.toDataURL('image/jpeg').slice('data:image/jpeg;base64,'.length), {"type" : "image\/jpeg"}));
-                        // Grab the image as a jpeg encoded in base64, but only the data
-                    //    data = canvas.toDataURL('image/jpeg').slice('data:image/jpeg;base64,'.length);
-                        var url = canvas.toDataURL('image/jpeg');//.slice('data:image/jpeg;base64,'.length);
-                        //console.log("converted to jpeg")
-                        // Convert the data to binary form
-                    //    data = atob(data);
-                        document.body.removeChild(canvas);
-                    }
+		/**
+		* Get the bounds from the bounding client rect for an element
+		* @param {String|Object} element The element whose bounds are to be found
+		* @return {Object} The bounds of the element
+		*/
+		SugarSerializer.prototype.getBounds = function(element){
+			element = this.fetchIfSelector(element);
+			var bounds = {};
+			if (this.elementExists(element)){
+				var rect = element.getBoundingClientRect();
+				bounds.top = rect.top;
+				bounds.bottom = rect.bottom;
+				bounds.left = rect.left;
+				bounds.right = rect.right;
+				bounds.height = rect.height;
+				bounds.width = rect.width;
+			};
+			return bounds;
+		};
 
+		/**
+		* Add styles information to svg in a CDATA section to avoid XML conversion issues
+		* @param {Object} svg The svg to which styles are to be added
+		* @param {String} [styles=""] The styles to be added
+		* @return {Object} The style element inside the svg
+		*/
+		SugarSerializer.prototype.addStyleToSVG = function(svg, styles){
+			styles = typeof styles === "string"? styles: "";
+			var defs = this.getChildType(svg, "defs", true);
+			var style = this.getChildType(defs, "style", false);
+			var currentStyle = this.popText(style);
+			this.addCDATASection(style, currentStyle + "\n" + styles);
+			return style;
+		}
 
-                    // TO append
-                    body.appendChild(a);
-                    a.setAttribute("class", "svg-extractor");
+		/**
+		* Add some sugary properties to an svg element which
+		* are apparenty needed, makes no assumptions on DOM presence
+		* @param {Object} svg The svg element on which sugar is to be added
+		* @return {Object} The svg object with sugar added
+		*/
+		SugarSerializer.prototype.addSugarToSVG = function(svg){
+			svg = this.fetchIfSelector(svg);
+			var svgExists = this.elementExists(svg);
+			if (svgExists === false){
+				return undefined;
+			}
+			svg.setAttribute("version", "1.1");
+			svg.removeAttribute("xmlns");
+			svg.removeAttribute("xlink");
+			var xmlns = this.consts.svgPrefix.xmlns;
+			var xlink = this.consts.svgPrefix.xlink;
+			var svgns = this.consts.svgPrefix.svg;
+			if (svg.hasAttributeNS(xmlns, "xmlns") === false) {
+				svg.setAttributeNS(xmlns, "xmlns", svgns);
+			}
+			if (svg.hasAttributeNS(xmlns, "xmlns:xlink") === false) {
+				svg.setAttributeNS(xmlns, "xmlns:xlink", xlink);
+			}
+			var defs = this.getChildType(svg, "defs", true);
+			var style = this.getChildType(defs, "style", false);
+			return svg;
+		};
 
-                    //a.setAttribute("download", filename + ".svg");
-                    a.setAttribute("href", url);
-                    a.style["display"] = "none";
-                    a.click();
+		/**
+		* Get the child of a type from an element, if not present add
+		* @param {String|Object} element The element to add the child to
+		* @param {String} childType The type of the child element
+		* @param {Boolean} addFirst True if addition as the first child
+		* @return {Object}
+		*/
+		SugarSerializer.prototype.getChildType = function(element, childType, addFirst){
+			addFirst = typeof addFirst === "boolean"? addFirst: false;
+			element = this.fetchIfSelector(element);
+			var child = undefined;
+			if (this.elementExists(element) === true){
+				child = element.querySelector(childType);
+				if (this.elementExists(child) === false){
+					this.addChild(element, childType, addFirst);
+				}
+			}
+			return child;
+		}
 
-                    setTimeout(function() {
-                      window.URL.revokeObjectURL(url);
-                    }, 10);
-                  }
+		var sugarSerializer = {
+			getSugarSerializer: function(){
+				return new SugarSerializer();
+			}
+		};
 
+		return sugarSerializer;
+	}());
 
-                                      // DOWNLOAD ALL BEGINNING
-                    // FOR DOWNLOADING ALL THE SVG's AND JPG's IN A ZIP FORMAT
-                function downloadAll(sources, type) {
-                    var filename = type + "images";
-                    var a = document.createElement("a");
-                    if (window.document.title) {
-                      filename = window.document.title.replace(/[^a-z0-9]/gi, '-').toLowerCase() + filename;
-                    }
-                    a.setAttribute("download", filename + ".zip");
-                    var zip = new JSZip();
-                    if (type == "SVG"){
-                        for (var i = 0 ; i < sources.length ; i++){
-                            //console.log("The source is " + sources[i].source)
-                            zip.file("image" + i.toString() + ".svg", sources[i].source.toString());
-                        }
-                        content = zip.generate();
-                        var url = "data:application/zip;base64," + content;//window.URL.createObjectURL(new Blob(source.source, { "type" : "text\/xml" }));
-                    }
-                    else if (type == "JPG"){
-                        for (var i = 0 ; i < sources.length ; i++){
-                            var img = new Image, data, ret={data: null, pending: true};
-                            img.onError = function() {
-                                            throw new Error('Cannot load image: "'+url+'"');
-                            }
-                            htmlX = sources[i].source;
-                            var imgsrcX = 'data:image/svg+xml;base64,' + btoa(htmlX);
-                            var imgX = '<img src="' + imgsrcX + '">';
-                            img.src = imgsrcX;
-                            var canvas = document.createElement('canvas');
-                            document.body.appendChild(canvas);
-                            canvas.width = sources[i].width;
-                            canvas.height = sources[i].height;
-                            var ctx = canvas.getContext('2d');
-                            ctx.rect(0,0,canvas.width,canvas.height);
-                            ctx.fillStyle="white";
-                            ctx.fill();
-                            ctx.drawImage(img, 0, 0);
-                        //    var url = window.URL.createObjectURL(new Blob(canvas.toDataURL('image/jpeg').slice('data:image/jpeg;base64,'.length), {"type" : "image\/jpeg"}));
-                            // Grab the image as a jpeg encoded in base64, but only the data
-                        //    data = canvas.toDataURL('image/jpeg').slice('data:image/jpeg;base64,'.length);
-                            //var url = canvas.toDataURL('image/jpeg');//.slice('data:image/jpeg;base64,'.length);
-                            zip.file("image" + i.toString() + ".jpg", canvas.toDataURL('image/jpeg').slice('data:image/jpeg;base64,'.length).toString(), {base64:true});
-                            //console.log("converted to jpeg")
-                            // Convert the data to binary form
-                        //    data = atob(data);
-                            document.body.removeChild(canvas);
-                        }
-                        content = zip.generate();
-                        var url = "data:application/zip;base64," + content;
-                        var blob = zip.generate({type:"blob"});
-                        saveAs(blob, "JPGimages.zip");
-                    }
-                    // SAVE FROM OBJECT URL
-                    // body.appendChild(a);
-                    // a.setAttribute("class", "svg-extractor");
+	/**
+	* Module for style sheet wrangling
+	* @return {Object} An object which has functions for wrangling style sheets
+	*/
+	Pryntr.prototype.cssWrangler = (function(){
 
-                    // //a.setAttribute("download", filename + ".svg");
-                    // a.setAttribute("href", url);
-                    // a.style["display"] = "none";
-                    // a.click();
+		/**
+		* Class for fetching page CSS Information
+		*/ 
+		function CSSWrangler(){
+		};
 
-                    // setTimeout(function() {
-                    //   window.URL.revokeObjectURL(url);
-                    // }, 10);
+		/**
+		* Get the style string of all documents
+		* @return {String} The style string from all sheets of all documents
+		*/
+		CSSWrangler.prototype.getStylesString = function(){
+			style = this.getSheetsString(this.getSheets(this.getDocs()));
+			return style;
+		};
 
-                    // END OF SAVE FROM OBJECT URL
+		/**
+		* Convert a list to an array
+		* @param {Object} list The list
+		* @return {Array.<Object>} The array from the list
+		*/
+		CSSWrangler.prototype.listToArray = function(list){
+			return Array.prototype.slice.call(list);
+		}
 
-                    // SAVE AS BLOB
+		/**
+		* Get the auxiliary docs
+		* @return {Array.<Object>} Array of aux doc nodes
+		*/
+		CSSWrangler.prototype.getAuxDocuments = function(){
+			var iframes = this.listToArray(document.querySelectorAll("iframe"));
+			var objects = this.listToArray(document.querySelectorAll("object"));
+			var aux = iframes.concat(objects);
+			return aux;
+		};
 
-                    // END OF SAVE AS BLOB
+		/**
+		* Convert from Nodes to Docs
+		* @param {Array.<Object>} docs The array of aux nodes
+		* @return {Array.<Object>} The array of aux docs
+		*/
+		CSSWrangler.prototype.filterAuxDocuments = function(docs){
+			var validDocs = [];
+			for (var i = 0; i < docs.length; i++){
+				if (typeof docs[i].contentDocument === "object"){
+					validDocs.push(docs[i].contentDocument);
+				}
+			}
+			return validDocs;
+		};
 
+		/**
+		* Return the documents present currently in the window
+		*  @return {Array.<Object>} The docs
+		* TODO: Also get the iframes and objects and filter on .contentDocument
+		*/
+		CSSWrangler.prototype.getDocs = function(){
+			var documents = [window.document];
+			var aux = this.filterAuxDocuments(this.getAuxDocuments());
+			return documents.concat(aux);
+		}
 
-                }
-                    // END OF DOWNLOAD ALL
+		/**
+		* Return the styleSheets of a document/documents
+		* @param {Object} docs The docs from which the stylesheet is to be extracted
+		* @return {Array.<Object>} The Array with CSSStyleSheets
+		*/
+		CSSWrangler.prototype.getSheets = function(docs){
+			var sheets = [];
+			docs = typeof docs.length !== "number"? [docs]: docs;
+			for (var i = 0; i < docs.length; i++){
+				var doc = docs[i];
+				var docSheet = typeof doc.styleSheets !== "undefined"? doc.styleSheets: undefined;
+				if (typeof docSheet === "object" && typeof docSheet.length === "number"){
+					//docSheet = this.listToArray(docSheet);
+					for (var j = 0; j < docSheet.length; j++){
+						sheets.push(docSheet[j]);
+					}
+				}
+			}
+			return sheets;
+		}
 
+		/**
+		* Get the string representation of a StyleSheet array
+		* @param {Array.<Object>} styleSheets The CSSStyleSheet array
+		* @return {String} The String with rules from the sheets
+		*/
+		CSSWrangler.prototype.getSheetsString = function(styleSheets){
+			var styles = "";
+			if (typeof styleSheets.length === "number"){
+				for (var i = 0; i < styleSheets.length; i++){
+					styles += this.getSheetString(styleSheets[i]);
+				}
+			}
+			return styles;
+		};
 
+		/**
+		* Get the rules of a css sheet into a string
+		* @param {Object} sheet The css sheet
+		* @param {String} [styles=""] The string of styles for recursion
+		* @return {String} The string of styles
+		*/
+		CSSWrangler.prototype.getSheetString = function(sheet, styles){
+			styles = typeof styles === "undefined"? "": styles;
+			if (typeof sheet.cssRules === "object" && sheet.cssRules !== null){
+				for (var i = 0; i < sheet.cssRules.length; i++){
+					var rule = sheet.cssRules[i];
+					if (rule.type === 3){
+						styles = styles + this.getSheetString(rule.styleSheet, styles);
+					}
+					else if (typeof rule.selectorText !== "undefined"){
+						styles = styles + "\n" + rule.cssText;
+					}
+				}
+			}
+			return styles;
+		};
 
-                  function getStyles(doc) {
-                    var styles = "",
-                        styleSheets = doc.styleSheets;
+		var cssWrangler = {
+			getWrangler: function(){
+				return new CSSWrangler();
+			}
+		}
 
-                    if (styleSheets) {
-                      for (var i = 0; i < styleSheets.length; i++) {
-                        processStyleSheet(styleSheets[i]);
-                      }
-                    }
+		return cssWrangler;
 
-                    function processStyleSheet(ss) {
-                      if (ss.cssRules) {
-                        for (var i = 0; i < ss.cssRules.length; i++) {
-                          var rule = ss.cssRules[i];
-                          if (rule.type === 3) {
-                            // Import Rule
-                            processStyleSheet(rule.styleSheet);
-                          } else {
-                            // hack for illustrator crashing on descendent selectors
-                            if (rule.selectorText) {
-                              // Add the if condition for retaining the illustrator hack
-                              //if (rule.selectorText.indexOf(">") === -1) {
-                                styles += "\n" + rule.cssText;
-                              //}
-                            }
-                          }
-                        }
-                      }
-                    }
-                    return styles;
-                  }
+	}());
 
-                }
-                //console.log("Getting vector strings");
-                svgInfo = getVectorString(pids);
-                //console.log("The vector string is " + svgInfo);
-                if (svgInfo == null){
-                    return;
-                }
-                for(var i = 0; i < photos.length; i++){
-                    for(var j = 0; j < svgInfo.length; j++){
-                        if (svgInfo[j].pid == photos[i].parentId){
-                            photos[i]["svgInfo"] = svgInfo[j]
-                        }
-                    }
-                }
-                for(var i = 0; i < photos.length; i++){
-                        //console.log("In photo  "+ i);
-                        photo = photos[i];
-                        var img = new Image, data, ret={data: null, pending: true};
-                        img.onError = function() {
-                                        throw new Error('Cannot load image: "'+url+'"');
-                        }
-                        counter = 0;
-                        //console.log("parent id is " + photo.parentId);
+	var pryntr = {
+		get: function(){
+			return new Pryntr();
+		}
+	};
 
-                        // var htmlX = d3.select("#" + photo.parentId + " > svg")
-                        //                           .attr("version", 1.1)
-                        //                          .attr("xmlns", "http://www.w3.org/2000/svg")
-                        //                           .node().parentNode.innerHTML;
-
-                        htmlX = photo.svgInfo.source;
-                        //console.log("The htmlX is " + htmlX);
-                        var imgsrcX = 'data:image/svg+xml;base64,' + btoa(htmlX);
-                        var imgX = '<img src="' + imgsrcX + '">';
-                        // d3.select("#svgdata"+photo.parentId).html(img);
-                        img.src = imgsrcX;
-                        //imgDict[photo.parentId] = img;
-                        photo['img'] = img;
-                        //console.log("imgsrcX is " + img.src);
-                        //console.log("Image width pre is " + img.width);
-                        //console.log("Image height pre is " + img.height);
-                        img.onload = function(parentId) {
-                                        gloCount = gloCount - 1;
-                                        if (gloCount != 0){
-                                            return;
-                                        }
-                                        else{
-                                            for(k = 0; k < photos.length; k++){
-                                                function decorate(favicon, width1, width2){
-                                                    favdata = favicon.slice('data:image/jpeg;base64,'.length);
-                                                    favdim = 3;
-                                                    favdata = atob(favdata);
-                                                    doc.setLineWidth(width1);
-                                                    doc.setDrawColor(255,165,0);
-                                                    doc.line(0, 0, pageWidth -favdim, 0);
-                                                    doc.line(0, 0, 0, pageHeight);
-                                                    doc.line(pageWidth, favdim, pageWidth, pageHeight);
-                                                    doc.line(0, pageHeight , pageWidth, pageHeight);
-                                                    // doc.setLineWidth(width2);
-                                                    // doc.setDrawColor(0,0,255);
-                                                    // offset = width1/1.1;
-                                                    // doc.line(offset, offset, pageWidth -favdim, offset);
-                                                    // doc.line(offset, offset, offset, pageHeight-offset);
-                                                    // doc.line(pageWidth - offset, favdim, pageWidth - offset, pageHeight - offset);
-                                                    // doc.line(offset, pageHeight - offset , pageWidth - offset, pageHeight- offset);
-                                                    // xx = pageWidth - favdim;
-                                                    // console.log("xx is " + xx);
-                                                    doc.addImage({imageData:favdata, format:'JPEG', x:xx ,y:0, w:favdim, h:favdim});
-                                                }
-                                                if (k == 0 && favicon != ""){
-                                                    decorate(favicon, 1, 0.2);
-                                                }
-                                                var canvas = document.createElement('canvas');
-                                                //console.log("canvas created")
-                                                document.body.appendChild(canvas);
-
-                                                // canvas.width = photos[k]['img'].width ;//+ photos[k].svgInfo.left;
-                                                // canvas.height = photos[k]['img'].height;// + photos[k].svgInfo.top;
-                                                if (vertical == "north" || vertical == "south"){
-                                                    canvas.width = photos[k].svgInfo.width;
-                                                    canvas.height = photos[k].svgInfo.height;
-                                                }
-                                                else if (vertical == "east" || vertical == "west"){
-                                                    canvas.width = photos[k].svgInfo.height;
-                                                    canvas.height = photos[k].svgInfo.width;
-                                                }
-
-
-                                                //console.log("Canvas width is " + canvas.width)
-                                                //console.log("Canvas height is " + canvas.height)
-                                                var ctx = canvas.getContext('2d');
-
-
-                                                ctx.rect(0,0,canvas.width,canvas.height);
-                                                ctx.fillStyle = "white";
-                                                ctx.fill();
-                                                if (vertical == "east" || vertical == "west" || vertical == "south"){
-                                                    angle = {"east": Math.PI*0.5, "south": Math.PI*1, "west": Math.PI*1.5};
-                                                    cw = canvas.width * 0.5;
-                                                    ch = canvas.height * 0.5;
-                                                    ctx.translate(cw, ch);
-                                                    ctx.rotate(angle[vertical]);
-                                                    if (vertical != "south"){
-                                                        ctx.drawImage(photos[k]['img'], -canvas.height/2, -canvas.width/2);
-                                                    }
-                                                    else{
-                                                        ctx.drawImage(photos[k]['img'], -canvas.width/2, -canvas.height/2);
-                                                    }
-                                                    //ctx.setTransform(1, 0, 0, 1, 0, 0);
-                                                }
-                                                else{
-                                                    ctx.drawImage(photos[k]['img'], 0, 0);
-                                                }
-
-                                                // ctx.drawImage(photos[k]['img'], 0, 0);
-                                                //console.log("Drawn image on ctx")
-                                                // Grab the image as a jpeg encoded in base64, but only the data
-                                                data = canvas.toDataURL('image/jpeg').slice('data:image/jpeg;base64,'.length);
-                                                //console.log("converted to jpeg")
-                                                // Convert the data to binary form
-                                                data = atob(data);
-                                                document.body.removeChild(canvas);
-                                                counter = counter + 1;
-
-                                                ret['data'] = data;
-                                                ret['pending'] = false;
-                                                //var doc = new jsPDF();
-
-                                                // w = photos[k]['img'].width;// + photos[k].svgInfo.left;
-                                                // h = photos[k]['img'].height;// + photos[k].svgInfo.top;
-                                                if (vertical == "north" || vertical == "south"){
-                                                    w = photos[k].svgInfo.width;
-                                                    h = photos[k].svgInfo.height;
-                                                }
-                                                else{
-                                                    w = photos[k].svgInfo.height;
-                                                    h = photos[k].svgInfo.width;
-                                                }
-
-                                                // console.log("Image width is " + w);
-                                                // console.log("Image height is " + h);
-
-                                                counter = counter + 1;
-                                                s = 1;
-                                                if (oneOnAPage == false || oneOnAPage == true){
-                                                    if ((w > (pageWidth - xpad*3)) || (h > (pageHeight - 3*ypad - fontsize))){
-                                                        //console.log("Its greater than bounds");
-                                                        sx = (pageWidth - xpad*3) / w;
-                                                        sy = (pageHeight - 3*ypad - fontsize) / h;
-                                                        s = Math.min(sx, sy);///2;
-                                                        //console.log("Scaling factor is " + s);
-                                                    }
-                                                    if (oneOnAPage == true){
-                                                        if (k > 0){
-                                                            doc.addPage();
-                                                            if (favicon != ""){
-                                                                decorate(favicon, 1, 0.2);
-                                                            }
-                                                        }
-                                                        y = (pageHeight/2) - (s*h/2) - 3*ypad;
-                                                    }
-                                                    if ((fontsize + 3*ypad + s*h + y) > pageHeight && oneOnAPage == false) {
-                                                        doc.addPage();
-                                                        if (favicon != ""){
-                                                            decorate(favicon, 1, 0.2);
-                                                        }
-                                                        y = 0;
-                                                    }
-                                                    y = y + ypad;
-                                                    if ((titleTop == true && vertical == "north")|| (titleTop == false && vertical=="south")){
-                                                        if (titleTop == true){
-                                                            console.log("Y is " + y);
-                                                            doc.text(xpad, y + ypad, photos[k].text);
-                                                            y = y + fontsize + ypad;
-                                                        }
-                                                        else{
-                                                            doc.text(photos[k].text, pageWidth - xpad, y + ypad, 180);
-                                                            y = y + fontsize + ypad;
-                                                        }
-                                                    }
-                                                    if (vertical == "north" || vertical == "south"){
-                                                        x = (pageWidth/2) - (s*w/2);
-                                                    }
-                                                    if (vertical == "east" || vertical == "west"){
-                                                        if (vertical == "east"){
-                                                            if (titleTop == true){
-                                                                x = (pageWidth/2) - (s*w/2) - xpad;
-                                                                doc.text(photos[k].text, pageWidth - xpad, y + ypad, 270)
-                                                            }
-                                                            else{
-                                                                x = (pageWidth/2) - (s*w/2) + xpad;
-                                                                doc.text(photos[k].text, xpad, y + ypad, 270);
-                                                            }
-                                                        }
-                                                        if (vertical == "west"){
-                                                            if (titleTop == false){
-                                                                x = (pageWidth/2) - (s*w/2) - xpad;
-                                                                doc.text(photos[k].text, pageWidth - xpad, y + (s*h), 90);
-                                                            }
-                                                            else{
-                                                                x = (pageWidth/2) - (s*w/2) + xpad;
-                                                                doc.text(photos[k].text, xpad, y + (s*h), 90);
-                                                            }
-                                                        }
-                                                    }
-                                                    // console.log("The scaling factor is " + s + " and the new width is " + w*s)
-                                                    if (oneOnAPage == false){
-                                                        doc.addImage({imageData:data, format:'JPEG', x:x, y:y, w:(w*s), h:(h*s)})
-                                                        y = y + ypad + (s*h);
-                                                    }
-                                                    else{
-                                                        y = (pageHeight/2) - (s*h/2);
-                                                        doc.addImage({imageData:data, format:'JPEG', x:x, y:y, w:(w*s), h:(h*s)});
-                                                        y = (pageHeight/2) + (s*h/2) + ypad;
-                                                    }
-                                                    //imageData, format, x, y, w, h, alias, compression, rotation
-                                                    if ( (titleTop == false && vertical == "north") || (titleTop == true && vertical == "south") || vertical == "west"){
-                                                        if (vertical == "north"){
-                                                            doc.text(xpad, y + ypad, photos[k].text);
-                                                            y = y + fontsize + ypad;
-                                                        }
-                                                        else if (vertical == "south"){
-                                                            doc.text(photos[k].text, pageWidth - xpad, y + ypad, 180);
-                                                            y = y + fontsize + ypad;
-                                                        }
-                                                    }
-                                                }
-                                                else{
-                                                    //console.log("Inside oneonaPage");
-                                                    if ((w > (pageWidth - xpad*3)) || (h > (pageHeight - 3*ypad - fontsize))){
-                                                        //console.log("Its greater than bounds");
-                                                        if(k > 0){
-                                                            doc.addPage();
-                                                            if (favicon != ""){
-                                                                decorate(favicon, 1, 0.2);
-                                                            }
-                                                            y = 0;
-                                                        }
-                                                        sx = (pageWidth - xpad*3) / w;
-                                                        sy = (pageHeight - 3*ypad - fontsize) / h;
-                                                        s = Math.min(sx, sy);///2;
-                                                        x = (pageWidth/2) - (s*w/2);
-                                                        y = (pageHeight/2) - (s*h/2);
-                                                        doc.text(xpad, y - ypad, photos[k].text);
-                                                        doc.addImage({imageData:data, format:'JPEG', x:x, y:y, w:(w*s), h:(h*s)});
-                                                    }
-                                                }
-
-                                                }
-                                    }
-                                        //document.location.href(document.location + "/PDF/#" + "");
-                                        //doc.output('save', 'filename.pdf'); //Try to save PDF as a file (not works on ie before 10, and some mobile devices)
-                                        //doc.output('datauristring');        //returns the data uri string
-                                        //doc.output('datauri');              //opens the data uri in current window
-
-                                        doc.output('dataurlnewwindow');     //opens the data uri in new window
-
-                                        processing = false;
-                                        return ret;
-                                    }
-                    }
-                }
-
-                //doc.output('datauri');
-                //return ret;
-                /*
-                doc.addImage({
-                        imageData : imgData,
-                        angle     : -20,
-                        x         : 10,
-                        y         : 78,
-                        w         : 45,
-                        h         : 58
-                })
-
-                pdf.text("rotated and centered around", 140, 300, 45, 'center')
-
-                */
+	return pryntr;
+}());
