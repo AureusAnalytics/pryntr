@@ -130,7 +130,7 @@ window.pryntr = (function(){
 		* @return {String} The filename for the zip or individual files inside zip or independent
 		*/
 		Downloader.prototype.getFileName = function(source, index, downloadType){
-			var name = typeof index === "number"? ("Chart_" + String(index)): "Pulse_Downloads";
+			var name = typeof index === "number"? ("Image_" + String(index)): "Downloads";
 			var extension = typeof downloadType === "string"? downloadType.toLowerCase(): "zip";
 			return name + "." + extension;
 		};
