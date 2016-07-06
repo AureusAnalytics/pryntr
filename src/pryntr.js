@@ -52,8 +52,8 @@ window.pryntr = (function(){
 		type = typeof type !== "string"? this.consts.defaultType: type;
 		selectors = typeof selectors === "undefined"? [this.consts.defaultSelector]: selectors;
 		selectors = typeof selectors === "string" || typeof selectors.length !== "number"? [selectors]: selectors;
-		var sugarSerializer = this.SVGSerializer.getSugarSerializer();
 		var cssWrangler = this.cssWrangler.getWrangler();
+		var sugarSerializer = this.SVGSerializer.getSugarSerializer(cssWrangler);
 		var rasterizer = this.rasterize.getRasterizer();
 		var downloader = this.downloader.getDownloader(rasterizer);
 		var styles = cssWrangler.getStylesString();
@@ -130,7 +130,7 @@ window.pryntr = (function(){
 		* @return {String} The filename for the zip or individual files inside zip or independent
 		*/
 		Downloader.prototype.getFileName = function(source, index, downloadType){
-			var name = typeof index === "number"? ("Image_" + String(index)): "Downloads";
+			var name = typeof index === "number"? ("Chart_" + String(index)): "Downloads";
 			var extension = typeof downloadType === "string"? downloadType.toLowerCase(): "zip";
 			return name + "." + extension;
 		};
@@ -278,6 +278,12 @@ window.pryntr = (function(){
 		*/
 		Downloader.prototype.PDFDownloader = function(sources, toZip){
 			console.log("I'm responsible for downloading PDF");
+			if (typeof this.rasterizer !== "undefined"){
+				if (typeof sources.length !== "number"){
+					source = [sources];
+				}
+
+			}
 		};
 
 		var downloader = {
@@ -456,7 +462,8 @@ window.pryntr = (function(){
 		/**
 		* Sugary serialize a SVG
 		*/
-		function SugarSerializer(){
+		function SugarSerializer(cssWrangler){
+			this.cssWrangler = cssWrangler;
 			this.consts = consts;
 		};
 
@@ -681,8 +688,9 @@ window.pryntr = (function(){
 			if (this.isSVG(element) === true){
 				clone = this.getElementClone(element);
 				// Add Sugar, Style and everything nice
+				this.cssWrangler.inlineStyleCloneElement(element, clone);
 				this.addSugarToSVG(clone);
-				this.addStyleToSVG(clone, styles);
+				//this.addStyleToSVG(clone, styles);
 			}
 			return clone;
 		};
@@ -820,8 +828,8 @@ window.pryntr = (function(){
 		}
 
 		var sugarSerializer = {
-			getSugarSerializer: function(){
-				return new SugarSerializer();
+			getSugarSerializer: function(cssWrangler){
+				return new SugarSerializer(cssWrangler);
 			}
 		};
 
@@ -838,6 +846,7 @@ window.pryntr = (function(){
 		* Class for fetching page CSS Information
 		*/ 
 		function CSSWrangler(){
+			this.validProperties = ["accent-height","accumulate","additive","alignment-baseline","allowReorder","alphabetic","amplitude","arabic-form","ascent","attributeName","attributeType","autoReverse","azimuth","baseFrequency","baseline-shift","baseProfile","bbox","begin","bias","by","calcMode","cap-height","class","clip","clipPathUnits","clip-path","clip-rule","color","color-interpolation","color-interpolation-filters","color-profile","color-rendering","contentScriptType","contentStyleType","cursor","cx","cy","d","decelerate","descent","diffuseConstant","direction","display","divisor","dominant-baseline","dur","dx","dy","edgeMode","elevation","enable-background","end","exponent","externalResourcesRequired","fill","fill-opacity","fill-rule","filter","filterRes","filterUnits","flood-color","flood-opacity", /*computed style returns font instead of fam and sizes*/"font", "font-family","font-size","font-size-adjust","font-stretch","font-style","font-variant","font-weight","format","from","fx","fy","g1","g2","glyph-name","glyph-orientation-horizontal","glyph-orientation-vertical","glyphRef","gradientTransform","gradientUnits","hanging","height","horiz-adv-x","horiz-origin-x","id","ideographic","image-rendering","in","in2","intercept","k","k1","k2","k3","k4","kernelMatrix","kernelUnitLength","kerning","keyPoints","keySplines","keyTimes","lang","lengthAdjust","letter-spacing","lighting-color","limitingConeAngle","local","marker-end","marker-mid","marker-start","markerHeight","markerUnits","markerWidth","mask","maskContentUnits","maskUnits","mathematical","max","media","method","min","mode","name","numOctaves","offset","onabort","onactivate","onbegin","onclick","onend","onerror","onfocusin","onfocusout","onload","onmousedown","onmousemove","onmouseout","onmouseover","onmouseup","onrepeat","onresize","onscroll","onunload","onzoom","opacity","operator","order","orient","orientation","origin","overflow","overline-position","overline-thickness","panose-1","paint-order","pathLength","patternContentUnits","patternTransform","patternUnits","pointer-events","points","pointsAtX","pointsAtY","pointsAtZ","preserveAlpha","preserveAspectRatio","primitiveUnits","r","radius","refX","refY","rendering-intent","repeatCount","repeatDur","requiredExtensions","requiredFeatures","restart","result","rotate","rx","ry","scale","seed","shape-rendering","slope","spacing","specularConstant","specularExponent","speed","spreadMethod","startOffset","stdDeviation","stemh","stemv","stitchTiles","stop-color","stop-opacity","strikethrough-position","strikethrough-thickness","string","stroke","stroke-dasharray","stroke-dashoffset","stroke-linecap","stroke-linejoin","stroke-miterlimit","stroke-opacity","stroke-width","style","surfaceScale","systemLanguage","tableValues","target","targetX","targetY","text-anchor","text-decoration","text-rendering","textLength","to","transform","type","u1","u2","underline-position","underline-thickness","unicode","unicode-bidi","unicode-range","units-per-em","v-alphabetic","v-hanging","v-ideographic","v-mathematical","values","version","vert-adv-y","vert-origin-x","vert-origin-y","viewBox","viewTarget","visibility","width","widths","word-spacing","writing-mode","x","x-height","x1","x2","xChannelSelector","xlink:actuate","xlink:arcrole","xlink:href","xlink:role","xlink:show","xlink:title","xlink:type","xml:base","xml:lang","xml:space","y","y1","y2","yChannelSelector","z","zoomAndPan"];
 		};
 
 		/**
@@ -952,6 +961,68 @@ window.pryntr = (function(){
 			}
 			return styles;
 		};
+
+
+		/**
+		* Is this key a valid key for a property?
+		* Currently, check if the key is not parsable to a number
+		* Check if it is a webkit property
+		* Check if the key is in the element attribute list
+		* @param {String} key The key value for the validity check
+		* @return {Boolean} True if the key is a proper property name
+		*/
+		CSSWrangler.prototype.isValid = function(key, attrs){
+			return isNaN(parseInt(key)) && key.indexOf("webkit") < 0 && attrs.indexOf(key) < 0 && this.validProperties.indexOf(key) >= 0;
+		};
+
+		/**
+		* Get the computed style dict for an element, convert the style dict to a string suitable for inline style attribute value
+		* @param {Object} element The element whose computed style dict is to be found
+		* @return {String} The style string for the element
+		*/
+		CSSWrangler.prototype.getComputedStyleString = function(element){
+			var styleDict = document.defaultView.getComputedStyle(element);
+			var styleString = "";
+			var ctx = this;
+			var attrs = this.getAttributeList(element);
+			Object.keys(styleDict).forEach(function(key){
+				if (styleDict.hasOwnProperty(key) && ctx.isValid(key, attrs)){
+					styleString = styleString + key + ":" + styleDict[key] + ";";
+				}
+			});
+			return styleString;
+		};
+
+		/**
+		* Get the list of attributes that an element currently has
+		* @param {Object} element The element whose attribute list is to be fetched
+		* @return {Array.<String>} The list of attributes that the element possesses
+		*/
+		CSSWrangler.prototype.getAttributeList = function(element){
+			var attrNames = [];
+			var attrs = element.attributes;
+			for (var i = 0; i < attrs.length; i++){
+				attrNames.push(attrs[i].nodeName);
+			}
+			return attrNames;
+		}
+
+		/**
+		* Compute the style of each node in the tree of the original element and add them as inline style to the clone peer
+		* Now do the same for all the children pairs
+		* Make sure that element and clone have the same structure
+		* @param {Object} element The Node whose style are to be copied
+		* @param {Object} clone The corresponding clone peer
+		*/
+		CSSWrangler.prototype.inlineStyleCloneElement = function(element, shadowPeer){
+			var eleChildren = element.children;
+			var shadowPeerChildren = shadowPeer.children;
+			shadowPeer.setAttribute("style", shadowPeer.getAttribute("style") + this.getComputedStyleString(element));
+			for (var i = 0; i < eleChildren.length; i++){
+				this.inlineStyleCloneElement(eleChildren[i], shadowPeerChildren[i]);
+			}
+		};
+
 
 		var cssWrangler = {
 			getWrangler: function(){
