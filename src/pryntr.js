@@ -47,17 +47,22 @@ window.pryntr = (function(){
 	* Print/Download the SVGs specified by the selectors
 	* @param {String|Array.<String>} [selectors=["svg"]] The selectors for the elements to be printed
 	* @param {String} [type="svg"] The type of download expected
+	* @param {Boolean} [toZip=true] True if the contents are to be zipped and then downloaded
+	* @param {Boolean} [inlineStyles=true] True if the styles are to be inlined,
+	* else all the styles of the document will be put in the style element in the defs section of the serialized SVG
 	*/
-	Pryntr.prototype.prynt = function(selectors, type){
+	Pryntr.prototype.prynt = function(selectors, type, toZip, inlineStyles){
 		type = typeof type !== "string"? this.consts.defaultType: type;
 		selectors = typeof selectors === "undefined"? [this.consts.defaultSelector]: selectors;
 		selectors = typeof selectors === "string" || typeof selectors.length !== "number"? [selectors]: selectors;
+		toZip = typeof toZip === "boolean"? toZip: true;
+		inlineStyles = typeof inlineStyles === "boolean"? inlineStyles: false;
 		var cssWrangler = this.cssWrangler.getWrangler();
 		var sugarSerializer = this.SVGSerializer.getSugarSerializer(cssWrangler);
 		var rasterizer = this.rasterize.getRasterizer();
 		var downloader = this.downloader.getDownloader(rasterizer);
 		var styles = cssWrangler.getStylesString();
-		var sources = sugarSerializer.getSugaryInfos(selectors, styles);
+		var sources = sugarSerializer.getSugaryInfos(selectors, styles, inlineStyles);
 		sources.length > 0? downloader.download(sources, type):undefined;
 	};
 
@@ -82,7 +87,7 @@ window.pryntr = (function(){
 	};
 
 	/**
-	* Module for downloading the SVG sources in SVG, PDF+Layout & JPG
+	* Module for downloading the SVG sources in SVG, JPG or PNG(TODO PDF+Layout)
 	*/
 	Pryntr.prototype.downloader = (function(){
 
@@ -635,14 +640,15 @@ window.pryntr = (function(){
 		* Get the image sources and bounding box information
 		* @param {String|Array.<String>|Array.<Object>} elements The elements whose info is sought
 		* @param {String} styles The styles to be added to the source
+		* @param {Boolean} inlineStyles If true, use inline styling for the serialized SVG
 		* @return {Array.<Object>} The info objects containing sources and box infos
 		*/
-		SugarSerializer.prototype.getSugaryInfos = function(elements, styles){
+		SugarSerializer.prototype.getSugaryInfos = function(elements, styles, inlineStyles){
 			var sources = [];
 			elements = typeof elements === "string"? [elements]: elements;
 			for (var i = 0; i < elements.length; i++){
 				if (this.isSVG(elements[i]) === true){
-					sources.push(this.getSugaryInfo(elements[i], styles));
+					sources.push(this.getSugaryInfo(elements[i], styles, inlineStyles));
 				}
 			}
 			return sources;
@@ -652,11 +658,12 @@ window.pryntr = (function(){
 		* Get the image source and bounding box information
 		* @param {String|Object} element The element whose info is sought
 		* @param {String} styles The styles to be added to the source
+		* @param {String} inlineStyles If true, use inline styles for the serialized SVG
 		* @return {Object} The info object containing source and box info
 		*/
-		SugarSerializer.prototype.getSugaryInfo = function(element, styles){
+		SugarSerializer.prototype.getSugaryInfo = function(element, styles, inlineStyles){
 			var info = this.getBounds(element);
-			info["source"] = this.getSugarySource(element, styles);
+			info["source"] = this.getSugarySource(element, styles, inlineStyles);
 			return info;
 		};
 
@@ -664,10 +671,11 @@ window.pryntr = (function(){
 		* Get the sugary and styled source of the svg
 		* @param {String|Object} element The svg element
 		* @param {String} [styles=""] The styles to be added to the svg
+		* @param {Boolean} inlineStyles If true, use inline styles for the serialized SVG
 		* @return {String} The sugared and styled source
 		*/
-		SugarSerializer.prototype.getSugarySource = function(element, styles){
-			var sugaryElement = this.getSugaryClone(element, styles);
+		SugarSerializer.prototype.getSugarySource = function(element, styles, inlineStyles){
+			var sugaryElement = this.getSugaryClone(element, styles, inlineStyles);
 			var source = this.serialize(sugaryElement);
 			if (typeof source === "string"){
 				source = this.consts.svgDoctype + source;
@@ -679,18 +687,23 @@ window.pryntr = (function(){
 		* Clone a svg and add sugar and style to it
 		* @param {String|Object} element The svg element
 		* @param {String} [styles=""] The styles to be added to the svg
-		* @return {Object} The sugared and styled clone
+		* @param {Boolean} inlineStyles If true, use inline styles for the serialized SVG
+		* @return {Object} The sugared and styled/inlineStyled clone
 		*/
-		SugarSerializer.prototype.getSugaryClone = function(element, styles){
+		SugarSerializer.prototype.getSugaryClone = function(element, styles, inlineStyles){
 			var clone = undefined;
 			element = this.fetchIfSelector(element);
 			styles = typeof styles === "string"? styles: "";
 			if (this.isSVG(element) === true){
 				clone = this.getElementClone(element);
-				// Add Sugar, Style and everything nice
-				this.cssWrangler.inlineStyleCloneElement(element, clone);
+				// Add Sugar, Style and everything
+				if (inlineStyles === true){
+					this.cssWrangler.inlineStyleCloneElement(element, clone);// Add inline styling to the clone if true
+				}
 				this.addSugarToSVG(clone);
-				//this.addStyleToSVG(clone, styles);
+				if (inlineStyles !== true){
+					this.addStyleToSVG(clone, styles);// Add the styles to defs if inline styling is false
+				}
 			}
 			return clone;
 		};
@@ -846,6 +859,7 @@ window.pryntr = (function(){
 		* Class for fetching page CSS Information
 		*/ 
 		function CSSWrangler(){
+			// Attribute list obtained from https://developer.mozilla.org/en-US/docs/Web/SVG/Attribute
 			this.validProperties = ["accent-height","accumulate","additive","alignment-baseline","allowReorder","alphabetic","amplitude","arabic-form","ascent","attributeName","attributeType","autoReverse","azimuth","baseFrequency","baseline-shift","baseProfile","bbox","begin","bias","by","calcMode","cap-height","class","clip","clipPathUnits","clip-path","clip-rule","color","color-interpolation","color-interpolation-filters","color-profile","color-rendering","contentScriptType","contentStyleType","cursor","cx","cy","d","decelerate","descent","diffuseConstant","direction","display","divisor","dominant-baseline","dur","dx","dy","edgeMode","elevation","enable-background","end","exponent","externalResourcesRequired","fill","fill-opacity","fill-rule","filter","filterRes","filterUnits","flood-color","flood-opacity", /*computed style returns font instead of fam and sizes*/"font", "font-family","font-size","font-size-adjust","font-stretch","font-style","font-variant","font-weight","format","from","fx","fy","g1","g2","glyph-name","glyph-orientation-horizontal","glyph-orientation-vertical","glyphRef","gradientTransform","gradientUnits","hanging","height","horiz-adv-x","horiz-origin-x","id","ideographic","image-rendering","in","in2","intercept","k","k1","k2","k3","k4","kernelMatrix","kernelUnitLength","kerning","keyPoints","keySplines","keyTimes","lang","lengthAdjust","letter-spacing","lighting-color","limitingConeAngle","local","marker-end","marker-mid","marker-start","markerHeight","markerUnits","markerWidth","mask","maskContentUnits","maskUnits","mathematical","max","media","method","min","mode","name","numOctaves","offset","onabort","onactivate","onbegin","onclick","onend","onerror","onfocusin","onfocusout","onload","onmousedown","onmousemove","onmouseout","onmouseover","onmouseup","onrepeat","onresize","onscroll","onunload","onzoom","opacity","operator","order","orient","orientation","origin","overflow","overline-position","overline-thickness","panose-1","paint-order","pathLength","patternContentUnits","patternTransform","patternUnits","pointer-events","points","pointsAtX","pointsAtY","pointsAtZ","preserveAlpha","preserveAspectRatio","primitiveUnits","r","radius","refX","refY","rendering-intent","repeatCount","repeatDur","requiredExtensions","requiredFeatures","restart","result","rotate","rx","ry","scale","seed","shape-rendering","slope","spacing","specularConstant","specularExponent","speed","spreadMethod","startOffset","stdDeviation","stemh","stemv","stitchTiles","stop-color","stop-opacity","strikethrough-position","strikethrough-thickness","string","stroke","stroke-dasharray","stroke-dashoffset","stroke-linecap","stroke-linejoin","stroke-miterlimit","stroke-opacity","stroke-width","style","surfaceScale","systemLanguage","tableValues","target","targetX","targetY","text-anchor","text-decoration","text-rendering","textLength","to","transform","type","u1","u2","underline-position","underline-thickness","unicode","unicode-bidi","unicode-range","units-per-em","v-alphabetic","v-hanging","v-ideographic","v-mathematical","values","version","vert-adv-y","vert-origin-x","vert-origin-y","viewBox","viewTarget","visibility","width","widths","word-spacing","writing-mode","x","x-height","x1","x2","xChannelSelector","xlink:actuate","xlink:arcrole","xlink:href","xlink:role","xlink:show","xlink:title","xlink:type","xml:base","xml:lang","xml:space","y","y1","y2","yChannelSelector","z","zoomAndPan"];
 		};
 
