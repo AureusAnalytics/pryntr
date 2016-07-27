@@ -32,15 +32,17 @@
 *
 */
 
+/*jslint browser: true */
+/*global window*/
+/*global console*/
+/*global btoa*/
+/*global DOMParser*/
+/*global XMLSerializer*/
+/*global unescape*/
 window.pryntr = (function(){
-
-	var consts = {
-		defaultType: "svg",
-		defaultSelector: "svg",
-	};
+	"use strict";
 
 	function Pryntr(){
-		this.consts = consts;
 	}
 
 	/**
@@ -52,18 +54,20 @@ window.pryntr = (function(){
 	* else all the styles of the document will be put in the style element in the defs section of the serialized SVG
 	*/
 	Pryntr.prototype.prynt = function(selectors, type, toZip, inlineStyles){
-		type = typeof type !== "string"? this.consts.defaultType: type;
-		selectors = typeof selectors === "undefined"? [this.consts.defaultSelector]: selectors;
-		selectors = typeof selectors === "string" || typeof selectors.length !== "number"? [selectors]: selectors;
+		type = typeof type !== "string"? "svg": type;
+		selectors = selectors === undefined? ["svg"]: selectors;
+		selectors = (typeof selectors === "string" || typeof selectors.length !== "number")? [selectors]: selectors;
 		toZip = typeof toZip === "boolean"? toZip: true;
-		inlineStyles = typeof inlineStyles === "boolean"? inlineStyles: false;
+		inlineStyles = typeof inlineStyles === "boolean"? inlineStyles: true;
 		var cssWrangler = this.cssWrangler.getWrangler();
 		var sugarSerializer = this.SVGSerializer.getSugarSerializer(cssWrangler);
 		var rasterizer = this.rasterize.getRasterizer();
 		var downloader = this.downloader.getDownloader(rasterizer);
 		var styles = cssWrangler.getStylesString();
 		var sources = sugarSerializer.getSugaryInfos(selectors, styles, inlineStyles);
-		sources.length > 0? downloader.download(sources, type):undefined;
+		if (sources.length > 0){
+			downloader.download(sources, type, toZip);
+		}
 	};
 
 	/**
@@ -83,7 +87,7 @@ window.pryntr = (function(){
 	Pryntr.prototype.pryntSources = function(sources, type){
 		sources = typeof sources === "string"? [sources]: sources;
 		var downloader = this.downloader.getDownloader();
-		downloader.sourceDownloader(sources, true, type);
+		downloader.sourceDownload(sources, true, type);
 	};
 
 	/**
@@ -91,9 +95,17 @@ window.pryntr = (function(){
 	*/
 	Pryntr.prototype.downloader = (function(){
 
+		var consts = {
+			typeToMIMEMap: {"svg": "image/svg+xml", "jpg": "image/jpeg", "png": "image/png"},
+			typeTransformMap: {"svg": false, "jpg": true, "png": true},
+			typeToBase64FormatMap: {"svg": false, "jpg": true, "png": true},
+			sourceType: "svg"
+		};
+
 		function Downloader(rasterizer){
 			this.rasterizer = rasterizer;
-		};
+			this.consts = consts;
+		}
 
 		/**
 		* Expose the available download types
@@ -108,23 +120,9 @@ window.pryntr = (function(){
 		* @param {Object|Array.<Object>} The sources to be downloaded
 		* @param {String} downloadType The download type specified
 		*/
-		Downloader.prototype.download = function(sources, downloadType){
+		Downloader.prototype.download = function(sources, downloadType, toZip){
 			downloadType = downloadType.toLowerCase();
-			if (downloadType === "svg"){
-				this.SVGDownloader(sources);
-			}
-			else if(downloadType === "jpg"){
-				this.JPGDownloader(sources);
-			}
-			else if(downloadType === "png"){
-				this.PNGDownloader(sources);
-			}
-			else if (downloadType === "pdf"){
-				this.PDFDownloader(sources);
-			}
-			else{
-				console.log("The download type " + downloadType + " is not supported");
-			}
+			this.downloadImages(sources, downloadType, toZip);
 		};
 
 		/**
@@ -149,14 +147,6 @@ window.pryntr = (function(){
 		};
 
 		/**
-		* Generate a new pdf Document
-		* @return {Object} A pdf document
-		*/
-		Downloader.prototype.pdfDoc = function(){
-			return new jsPDF();
-		};
-
-		/**
 		* Add a new file to the zipper
 		* @param {Object} zipper The zipper Object
 		* @param {String} name The file name
@@ -164,7 +154,12 @@ window.pryntr = (function(){
 		* @param {Object} options The file options
 		*/
 		Downloader.prototype.addToZip = function(zipper, name, content, options){
-			typeof options === "object"? zipper.file(name, content, options): zipper.file(name, content);
+			if (typeof options === "object"){
+				zipper.file(name, content, options);
+			}
+			else{
+				zipper.file(name, content);
+			}
 		};
 
 		/**
@@ -175,17 +170,15 @@ window.pryntr = (function(){
 		* @param {Object} options The options for adding the file to zipper
 		*/
 		Downloader.prototype.addSourcesToZip = function(sources, zipper, downloadType, options){
-			if (typeof sources.length !== "number"){
-				sources = [sources];
-			}
-			for (var i = 0; i < sources.length; i++){
-				var source = sources[i];
+			var downloader = this;
+			var name;
+			sources.forEach(function(source, i){
 				source = typeof source === "string"? source: source.source;
 				if (typeof source === "string"){
-					var name = this.getFileName(source, i, downloadType);
-					this.addToZip(zipper, name, source, options);
+					name = downloader.getFileName(source, i, downloadType);
+					downloader.addToZip(zipper, name, source, options);
 				}
-			}
+			});
 		};
 
 		/**
@@ -205,90 +198,115 @@ window.pryntr = (function(){
 		* @param {String} targetMIME The MIME type expected for the target
 		* @return {Array.<Object>} The SVG sources in the target format
 		*/
-		Downloader.prototype.transformSources = function(sources, sourceMIME, targetMIME){
-			if (typeof sources.length !== "number"){
-				sources = [sources];
-			}
+		Downloader.prototype.transformSources = function(sources, sourceMIME, targetMIME, keepURIScheme){
+			var downloader = this;
 			if (sourceMIME !== targetMIME){
-				for (var i = 0; i < sources.length; i++){
-					var source = sources[i];
-					if (typeof source.source === "string"){
-						source.source = this.rasterizer.transformSource(source.source, sourceMIME, targetMIME);
-					}
-				}
+				sources.forEach(function(source, i, sources){
+					sources[i].source = downloader.rasterizer.transformSource(source.source, sourceMIME, targetMIME, keepURIScheme);
+				});
 			}
 		};
 
-		Downloader.prototype.sourceDownloader = function(sources, toZip, format){
-			if (typeof sources.length !== "number"){
-				sources = [sources];
-			}
+		/**
+		 * Download the sources directly without using other parts of pryntr
+		 * @param {Object|Array.<Object>} The sources to download
+		 * @param {Boolean} toZip If the source is to be zipped before download
+		 * @param {String} format The file format for the source/homegeneous sources
+		 * */
+		Downloader.prototype.sourceDownload = function(sources, toZip, format){
 			var zipper = this.zipper();
 			this.addSourcesToZip(sources, zipper, format);
 			this.getZip(zipper);
 		};
 
 		/**
-		* Browser download of SVG/s source in SVG format
-		* @param {Object|Array.<Object>} The SVG sources to download
-		* @param {Boolean} [toZip=true] True if the contents are to be zipped
-		*/
-		Downloader.prototype.SVGDownloader = function(sources, toZip){
-			if (typeof sources.length !== "number"){
-				sources = [sources];
-			}
+		 * Convert the sources to a data URI format
+		 * @param {Array.<Object>} sources The sources to be converted
+		 * @param {String} imageType The target image type
+		 * */
+		Downloader.prototype.sourcesToURIFormat = function(sources, imageType, isBase64){
+			var downloader = this;
+			sources.forEach(function(source, i, sources){
+				sources[i].source = !isBase64? downloader.toURIScheme(source.source, imageType): downloader.prependURIScheme(source.source, imageType);
+			});
+		};
+
+		Downloader.prototype.prependURIScheme = function(source, imageType){
+			var mimeType = this.consts.typeToMIMEMap[imageType];
+			var mimeScheme = this.rasterizer.mimeToScheme(mimeType);
+			return mimeScheme + source;
+		};
+
+		Downloader.prototype.toURIScheme = function(source, imageType){
+			var mimeType = this.consts.typeToMIMEMap[imageType];
+			var mimeScheme = this.rasterizer.mimeToScheme(mimeType);
+			return this.rasterizer.stringToDataURI(source, mimeScheme);
+		};
+
+		/**
+		 * Download the sources in a zipped format
+		 * @param {Array.<Object>} sources The sources to be downloaded
+		 * @param {String} imageType The imageType/extension
+		 * @param {Boolean} isBase64 Is the image in source or base64
+		 * */
+		Downloader.prototype.zippedDownload = function(sources, imageType, isBase64){
 			var zipper = this.zipper();
-			this.addSourcesToZip(sources, zipper, "svg");
+			this.addSourcesToZip(sources, zipper, imageType, {base64: isBase64});
 			this.getZip(zipper);
 		};
 
 		/**
-		* Browser download of SVG/s source in JPG format
-		* @param {Object|Array.<Object>} The SVG sources to download
-		* @param {Boolean} [toZip=true] True if the contents are to be zipped
-		*/
-		Downloader.prototype.JPGDownloader = function(sources, toZip){
-			if (typeof this.rasterizer !== "undefined"){
-				if (typeof sources.length !== "number"){
-					sources = [sources];
-				}
-				this.transformSources(sources, "image/svg+xml", "image/jpeg");
-				var zipper = this.zipper();
-				this.addSourcesToZip(sources, zipper, "jpg", {base64: true});
-				this.getZip(zipper);
+		 * Download without zipping
+		 * @param {Array.<Object>} sources The sources to be downloaded
+		 * @param {String} imageType The expected image type
+		 * */
+		Downloader.prototype.rawDownload = function(sources, imageType, isBase64){
+			this.sourcesToURIFormat(sources, imageType, isBase64);
+			this.downloadRawSources(sources, imageType);
+		};
+
+		Downloader.prototype.downloadImages = function(sources, imageType, toZip){
+			var sourceMIME = this.consts.typeToMIMEMap[this.consts.sourceType];
+			var targetMIME = this.consts.typeToMIMEMap[imageType];
+			var isBase64 = this.consts.typeToBase64FormatMap[imageType];
+			if (this.consts.typeTransformMap[imageType]){
+				this.transformSources(sources, sourceMIME, targetMIME);
+			}
+			if (toZip){
+				this.zippedDownload(sources, imageType, isBase64);
+			}
+			else{
+				this.rawDownload(sources, imageType, isBase64);
 			}
 		};
 
 		/**
-		* Browser download of SVG/s source in PNG format
-		* @param {Object|Array.<Object>} The SVG sources to download
-		* @param {Boolean} [toZip=true] True if the contents are to be zipped
-		*/
-		Downloader.prototype.PNGDownloader = function(sources, toZip){
-			if (typeof this.rasterizer !== "undefined"){
-				if (typeof sources.length !== "number"){
-					sources = [sources];
-				}
-				this.transformSources(sources, "image/svg+xml", "image/png");
-				var zipper = this.zipper();
-				this.addSourcesToZip(sources, zipper, "png", {base64: true});
-				this.getZip(zipper);
-			}
+		 * Download raw sources without zipping
+		 * */
+		Downloader.prototype.downloadRawSources = function(sources, downloadType){
+			// The max number of files to be downloaded at a time using this method,
+			// usually, more than 1 results in the browser complaining
+			var limit = 1;
+			var limitedSources = sources.slice(0, limit);
+			var name;
+			var downloader = this;
+			limitedSources.forEach(function(source, index){
+				name = downloader.getFileName(source, index, downloadType);
+				source = typeof source === "string"? source: source.source;
+				downloader.singleFileDownload(source, name);
+			});
 		};
 
 		/**
-		* Browser download + layout of SVG/s source in PDF format
-		* @param {Object|Array.<Object>} The SVG sources to download
-		* @param {Boolean} [toZip=true] True if the contents are to be zipped
-		*/
-		Downloader.prototype.PDFDownloader = function(sources, toZip){
-			console.log("I'm responsible for downloading PDF");
-			if (typeof this.rasterizer !== "undefined"){
-				if (typeof sources.length !== "number"){
-					source = [sources];
-				}
-
-			}
+		 * Initiate a file download by creating a download anchor tag
+		 * @param {String} fileDataURI The contents of the file in a data URI scheme
+		 * @param {String} fileName The name of the file
+		 * */
+		Downloader.prototype.singleFileDownload = function(fileDataURI, fileName){
+			var link = document.createElement("a");
+			link.download = fileName;
+			link.href = fileDataURI;
+			link.click();
 		};
 
 		var downloader = {
@@ -302,53 +320,28 @@ window.pryntr = (function(){
 	}());
 
 	/**
-	* Calculate the positioning of rects in pages
-	*/
-	Pryntr.prototype.layoutEngine = (function(){
-
-		var consts = {};
-		var conf = {};
-
-		function LayoutEngine(){
-			this.consts = consts;
-			this.conf = conf;
-		}
-
-		var layoutEngine = {
-			getLayer: function(){
-				return new LayoutEngine(conf);
-			}
-		};
-
-	});
-
-	/**
 	* Module for converting vector SVG into JPEG by rendering it onto a canvas and ripping it back
 	*/
 	Pryntr.prototype.rasterize = (function(){
 
-		var consts = {
-			svgMIME: "image/svg+xml",
-		};
-
 		function Rasterize(){
-			this.consts = consts;
-		};
+		}
 
 		/**
 		* Convert a vector source to another format
 		* @param {String} source The source string
 		* @param {String} sourceMIME The MIME type for the source
 		* @param {String} targetMIME The MIME type for the target
+		* @param {Boolean} keepURIScheme If true, do not slice off the URI scheme
 		* @return {String} The b64 encoded transformed source(Not in URI scheme)
 		*/
-		Rasterize.prototype.transformSource = function(source, sourceMIME, targetMIME){
+		Rasterize.prototype.transformSource = function(source, sourceMIME, targetMIME, keepURIScheme){
 			var sourceScheme = this.mimeToScheme(sourceMIME);
 			var targetScheme = this.mimeToScheme(targetMIME);
 			var img = this.sourceToImage(source, sourceScheme);
 			var canvas = this.imgToCanvas(img);
 			var sourceURI = this.canvasToURI(canvas, targetMIME);
-			var source = this.sliceURI(sourceURI, targetScheme);
+			source = keepURIScheme === true? sourceURI: this.sliceURI(sourceURI, targetScheme);
 			return source;
 		};
 
@@ -390,7 +383,6 @@ window.pryntr = (function(){
 
 		/**
 		* Convert String to base64, escape Unicode characters
-		* Use 
 		* @param {String} binaryString The binary string 16 bit DOM string
 		* @return {String} The base64 ASCII conversion for the string 8 bit ASCII string
 		*/
@@ -429,7 +421,7 @@ window.pryntr = (function(){
 		*/
 		Rasterize.prototype.sourceToImage = function(source, mimeScheme){
 			return this.toImage(this.stringToDataURI(source, mimeScheme));
-		}
+		};
 
 		/**
 		* Create an image element with the specified source
@@ -437,7 +429,7 @@ window.pryntr = (function(){
 		* @return {Object} The img element with src as the source
 		*/
 		Rasterize.prototype.toImage = function(imageSource){
-			var img = new Image;
+			var img = new Image();
 			img.src = imageSource;
 			return img;
 		};
@@ -446,7 +438,7 @@ window.pryntr = (function(){
 			getRasterizer: function(){
 				return new Rasterize();
 			}
-		}
+		};
 
 		return raster;
 
@@ -456,7 +448,6 @@ window.pryntr = (function(){
 	/**
 	* Module for sugary SVG serializing
 	* @return {Object} An object which has functions for sugary serializing a SVG
-	* TODO: fetch the css styling by getting appropriate styles from the browser and applying it inline
 	*/
 	Pryntr.prototype.SVGSerializer = (function(){
 		var consts = {
@@ -470,7 +461,7 @@ window.pryntr = (function(){
 		function SugarSerializer(cssWrangler){
 			this.cssWrangler = cssWrangler;
 			this.consts = consts;
-		};
+		}
 
 		/**
 		* Check if the element is a string, if yes consider it as a selector and fetch it
@@ -480,7 +471,7 @@ window.pryntr = (function(){
 		SugarSerializer.prototype.fetchIfSelector = function(element){
 			element = typeof element === "string"? this.getElement(element): element;
 			return element;
-		}
+		};
 
 		/**
 		* Check if the element has a property whose value matches the expected value
@@ -492,11 +483,11 @@ window.pryntr = (function(){
 		SugarSerializer.prototype.checkElementProperty = function(element, property, expectedValue){
 			var match = false;
 			element = this.fetchIfSelector(element);
-			if (typeof element === "object" && typeof element[property] !== "undefined"){
+			if (typeof element === "object" && element[property] !== undefined){
 				match = element[property] === expectedValue;
 			}
 			return match;
-		}
+		};
 
 		/**
 		* Check if a Node has the tag name svg
@@ -517,14 +508,19 @@ window.pryntr = (function(){
 		* @return {Object} The child element
 		*/
 		SugarSerializer.prototype.addChildIfNonExistent = function(parentSelector, relativeChildSelector, childType, addFirst){
-			var child = undefined;
+			var child;
 			addFirst = typeof addFirst === "boolean"? addFirst: false;
 			var fullChildSelector = this.generateFullChildSelector(parentSelector, relativeChildSelector, true);
 			if (this.elementExists(fullChildSelector) === false){
 				var parent = this.fetchIfSelector(parentSelector);
 				child = document.createElement(childType);
 				// Add last or first based on addFirst
-				addFirst === true? parent.insertBefore(child, parent.firstChild): parent.appendChild(child);
+				if (addFirst === true){
+					parent.insertBefore(child, parent.firstChild);
+				}
+				else{
+					parent.appendChild(child);
+				}
 			}
 			else{
 				child = this.fetchIfSelector(fullChildSelector);
@@ -550,13 +546,18 @@ window.pryntr = (function(){
 		* @param {Boolean} [addFirst=false] If adding to the first position on the parent
 		*/
 		SugarSerializer.prototype.addChild = function(parentSelector, childType, addFirst){
-			var child = undefined;
+			var child;
 			addFirst = typeof addFirst === "boolean"? addFirst: false;
 			var parent = this.fetchIfSelector(parentSelector);
 			if (this.elementExists(parent) === true){
 				child = document.createElement(childType);
 				// Add last or first based on addFirst
-				addFirst === true? parent.insertBefore(child, parent.firstChild): parent.appendChild(child);
+				if (addFirst === true){
+					parent.insertBefore(child, parent.firstChild);
+				}
+				else{
+					parent.appendChild(child);
+				}
 			}
 			return child;
 		};
@@ -567,8 +568,8 @@ window.pryntr = (function(){
 		* @return {String} The serialized element
 		*/
 		SugarSerializer.prototype.serialize = function(element){
-			var serial = undefined;
-			var element = this.fetchIfSelector(element);
+			var serial;
+			element = this.fetchIfSelector(element);
 			if (this.elementExists(element)){
 				serial = (new XMLSerializer()).serializeToString(element);
 			}
@@ -581,10 +582,9 @@ window.pryntr = (function(){
 		* @return {Boolean} True if the element is an object or the selector points to a DOM element
 		*/
 		SugarSerializer.prototype.elementExists = function(element){
-			var exists = false;
 			element = this.fetchIfSelector(element);
 			return typeof element === "object" && element !== null;
-		}
+		};
 
 		/**
 		* Generate full child selector from parent selector and relative child selector
@@ -597,7 +597,7 @@ window.pryntr = (function(){
 			direct = typeof direct === "boolean"? direct: true;
 			var connector = direct === true? " > ": " ";
 			return parentSelector + connector + relativeChildSelector;
-		}
+		};
 
 		/**
 		* Fetch an element from the DOM given a selector
@@ -616,12 +616,13 @@ window.pryntr = (function(){
 		* @return {Array.<Object>} The array of elements corresponding to the selectors
 		*/
 		SugarSerializer.prototype.getElements = function(selectors){
+			var sugarSerializer = this;
 			var elements = [];
-			for (var i = 0; i < selectors.length; i++){
-				elements.push(this.fetchIfSelector(selectors[i]));
-			}
+			selectors.forEach(function(selector){
+				elements.push(sugarSerializer.fetchIfSelector(selector));
+			});
 			return elements;
-		}
+		};
 
 		/**
 		* Get the clone of a DOM element
@@ -644,13 +645,14 @@ window.pryntr = (function(){
 		* @return {Array.<Object>} The info objects containing sources and box infos
 		*/
 		SugarSerializer.prototype.getSugaryInfos = function(elements, styles, inlineStyles){
+			var sugarSerializer = this;
 			var sources = [];
 			elements = typeof elements === "string"? [elements]: elements;
-			for (var i = 0; i < elements.length; i++){
-				if (this.isSVG(elements[i]) === true){
-					sources.push(this.getSugaryInfo(elements[i], styles, inlineStyles));
+			elements.forEach(function(element){
+				if (sugarSerializer.isSVG(element) === true){
+					sources.push(sugarSerializer.getSugaryInfo(element, styles, inlineStyles));
 				}
-			}
+			});
 			return sources;
 		};
 
@@ -663,7 +665,7 @@ window.pryntr = (function(){
 		*/
 		SugarSerializer.prototype.getSugaryInfo = function(element, styles, inlineStyles){
 			var info = this.getBounds(element);
-			info["source"] = this.getSugarySource(element, styles, inlineStyles);
+			info.source = this.getSugarySource(element, styles, inlineStyles);
 			return info;
 		};
 
@@ -691,7 +693,7 @@ window.pryntr = (function(){
 		* @return {Object} The sugared and styled/inlineStyled clone
 		*/
 		SugarSerializer.prototype.getSugaryClone = function(element, styles, inlineStyles){
-			var clone = undefined;
+			var clone;
 			element = this.fetchIfSelector(element);
 			styles = typeof styles === "string"? styles: "";
 			if (this.isSVG(element) === true){
@@ -721,7 +723,7 @@ window.pryntr = (function(){
 				element.innerText = "";
 			}
 			return text;
-		}
+		};
 
 		/**
 		* Append text to an element with prefix and suffix
@@ -772,7 +774,7 @@ window.pryntr = (function(){
 				bounds.right = rect.right;
 				bounds.height = rect.height;
 				bounds.width = rect.width;
-			};
+			}
 			return bounds;
 		};
 
@@ -784,12 +786,12 @@ window.pryntr = (function(){
 		*/
 		SugarSerializer.prototype.addStyleToSVG = function(svg, styles){
 			styles = typeof styles === "string"? styles: "";
-			var defs = this.getChildType(svg, "defs", true);
-			var style = this.getChildType(defs, "style", false);
+			var defs = this.addChildTypeIfAbsent(svg, "defs", true);
+			var style = this.addChildTypeIfAbsent(defs, "style", false);
 			var currentStyle = this.popText(style);
 			this.addCDATASection(style, currentStyle + "\n" + styles);
 			return style;
-		}
+		};
 
 		/**
 		* Add some sugary properties to an svg element which
@@ -815,8 +817,8 @@ window.pryntr = (function(){
 			if (svg.hasAttributeNS(xmlns, "xmlns:xlink") === false) {
 				svg.setAttributeNS(xmlns, "xmlns:xlink", xlink);
 			}
-			var defs = this.getChildType(svg, "defs", true);
-			var style = this.getChildType(defs, "style", false);
+			var defs = this.addChildTypeIfAbsent(svg, "defs", true);
+			this.addChildTypeIfAbsent(defs, "style", false);
 			return svg;
 		};
 
@@ -827,10 +829,10 @@ window.pryntr = (function(){
 		* @param {Boolean} addFirst True if addition as the first child
 		* @return {Object}
 		*/
-		SugarSerializer.prototype.getChildType = function(element, childType, addFirst){
+		SugarSerializer.prototype.addChildTypeIfAbsent = function(element, childType, addFirst){
 			addFirst = typeof addFirst === "boolean"? addFirst: false;
 			element = this.fetchIfSelector(element);
-			var child = undefined;
+			var child;
 			if (this.elementExists(element) === true){
 				child = element.querySelector(childType);
 				if (this.elementExists(child) === false){
@@ -838,7 +840,7 @@ window.pryntr = (function(){
 				}
 			}
 			return child;
-		}
+		};
 
 		var sugarSerializer = {
 			getSugarSerializer: function(cssWrangler){
@@ -861,14 +863,14 @@ window.pryntr = (function(){
 		function CSSWrangler(){
 			// Attribute list obtained from https://developer.mozilla.org/en-US/docs/Web/SVG/Attribute
 			this.validProperties = ["accent-height","accumulate","additive","alignment-baseline","allowReorder","alphabetic","amplitude","arabic-form","ascent","attributeName","attributeType","autoReverse","azimuth","baseFrequency","baseline-shift","baseProfile","bbox","begin","bias","by","calcMode","cap-height","class","clip","clipPathUnits","clip-path","clip-rule","color","color-interpolation","color-interpolation-filters","color-profile","color-rendering","contentScriptType","contentStyleType","cursor","cx","cy","d","decelerate","descent","diffuseConstant","direction","display","divisor","dominant-baseline","dur","dx","dy","edgeMode","elevation","enable-background","end","exponent","externalResourcesRequired","fill","fill-opacity","fill-rule","filter","filterRes","filterUnits","flood-color","flood-opacity", /*computed style returns font instead of fam and sizes*/"font", "font-family","font-size","font-size-adjust","font-stretch","font-style","font-variant","font-weight","format","from","fx","fy","g1","g2","glyph-name","glyph-orientation-horizontal","glyph-orientation-vertical","glyphRef","gradientTransform","gradientUnits","hanging","height","horiz-adv-x","horiz-origin-x","id","ideographic","image-rendering","in","in2","intercept","k","k1","k2","k3","k4","kernelMatrix","kernelUnitLength","kerning","keyPoints","keySplines","keyTimes","lang","lengthAdjust","letter-spacing","lighting-color","limitingConeAngle","local","marker-end","marker-mid","marker-start","markerHeight","markerUnits","markerWidth","mask","maskContentUnits","maskUnits","mathematical","max","media","method","min","mode","name","numOctaves","offset","onabort","onactivate","onbegin","onclick","onend","onerror","onfocusin","onfocusout","onload","onmousedown","onmousemove","onmouseout","onmouseover","onmouseup","onrepeat","onresize","onscroll","onunload","onzoom","opacity","operator","order","orient","orientation","origin","overflow","overline-position","overline-thickness","panose-1","paint-order","pathLength","patternContentUnits","patternTransform","patternUnits","pointer-events","points","pointsAtX","pointsAtY","pointsAtZ","preserveAlpha","preserveAspectRatio","primitiveUnits","r","radius","refX","refY","rendering-intent","repeatCount","repeatDur","requiredExtensions","requiredFeatures","restart","result","rotate","rx","ry","scale","seed","shape-rendering","slope","spacing","specularConstant","specularExponent","speed","spreadMethod","startOffset","stdDeviation","stemh","stemv","stitchTiles","stop-color","stop-opacity","strikethrough-position","strikethrough-thickness","string","stroke","stroke-dasharray","stroke-dashoffset","stroke-linecap","stroke-linejoin","stroke-miterlimit","stroke-opacity","stroke-width","style","surfaceScale","systemLanguage","tableValues","target","targetX","targetY","text-anchor","text-decoration","text-rendering","textLength","to","transform","type","u1","u2","underline-position","underline-thickness","unicode","unicode-bidi","unicode-range","units-per-em","v-alphabetic","v-hanging","v-ideographic","v-mathematical","values","version","vert-adv-y","vert-origin-x","vert-origin-y","viewBox","viewTarget","visibility","width","widths","word-spacing","writing-mode","x","x-height","x1","x2","xChannelSelector","xlink:actuate","xlink:arcrole","xlink:href","xlink:role","xlink:show","xlink:title","xlink:type","xml:base","xml:lang","xml:space","y","y1","y2","yChannelSelector","z","zoomAndPan"];
-		};
+		}
 
 		/**
 		* Get the style string of all documents
 		* @return {String} The style string from all sheets of all documents
 		*/
 		CSSWrangler.prototype.getStylesString = function(){
-			style = this.getSheetsString(this.getSheets(this.getDocs()));
+			var style = this.getSheetsAsString(this.getSheets(this.getDocs()));
 			return style;
 		};
 
@@ -877,17 +879,17 @@ window.pryntr = (function(){
 		* @param {Object} list The list
 		* @return {Array.<Object>} The array from the list
 		*/
-		CSSWrangler.prototype.listToArray = function(list){
+		CSSWrangler.prototype.toArray = function(list){
 			return Array.prototype.slice.call(list);
-		}
+		};
 
 		/**
 		* Get the auxiliary docs
 		* @return {Array.<Object>} Array of aux doc nodes
 		*/
 		CSSWrangler.prototype.getAuxDocuments = function(){
-			var iframes = this.listToArray(document.querySelectorAll("iframe"));
-			var objects = this.listToArray(document.querySelectorAll("object"));
+			var iframes = this.toArray(document.querySelectorAll("iframe"));
+			var objects = this.toArray(document.querySelectorAll("object"));
 			var aux = iframes.concat(objects);
 			return aux;
 		};
@@ -899,24 +901,23 @@ window.pryntr = (function(){
 		*/
 		CSSWrangler.prototype.filterAuxDocuments = function(docs){
 			var validDocs = [];
-			for (var i = 0; i < docs.length; i++){
-				if (typeof docs[i].contentDocument === "object"){
-					validDocs.push(docs[i].contentDocument);
+			docs.forEach(function(doc){
+				if (typeof doc.contentDocument === "object"){
+					validDocs.push(doc.contentDocument);
 				}
-			}
+			});
 			return validDocs;
 		};
 
 		/**
 		* Return the documents present currently in the window
 		*  @return {Array.<Object>} The docs
-		* TODO: Also get the iframes and objects and filter on .contentDocument
 		*/
 		CSSWrangler.prototype.getDocs = function(){
 			var documents = [window.document];
 			var aux = this.filterAuxDocuments(this.getAuxDocuments());
 			return documents.concat(aux);
-		}
+		};
 
 		/**
 		* Return the styleSheets of a document/documents
@@ -924,32 +925,34 @@ window.pryntr = (function(){
 		* @return {Array.<Object>} The Array with CSSStyleSheets
 		*/
 		CSSWrangler.prototype.getSheets = function(docs){
+			var cssWrangler = this;
 			var sheets = [];
 			docs = typeof docs.length !== "number"? [docs]: docs;
-			for (var i = 0; i < docs.length; i++){
-				var doc = docs[i];
-				var docSheet = typeof doc.styleSheets !== "undefined"? doc.styleSheets: undefined;
+			var docSheet;
+			docs.forEach(function(doc){
+				docSheet = doc.styleSheets !== undefined? doc.styleSheets: undefined;
 				if (typeof docSheet === "object" && typeof docSheet.length === "number"){
-					//docSheet = this.listToArray(docSheet);
-					for (var j = 0; j < docSheet.length; j++){
-						sheets.push(docSheet[j]);
-					}
+					docSheet = cssWrangler.toArray(docSheet);
+					docSheet.forEach(function(styleSheet){
+						sheets.push(styleSheet);
+					});
 				}
-			}
+			});
 			return sheets;
-		}
+		};
 
 		/**
 		* Get the string representation of a StyleSheet array
 		* @param {Array.<Object>} styleSheets The CSSStyleSheet array
 		* @return {String} The String with rules from the sheets
 		*/
-		CSSWrangler.prototype.getSheetsString = function(styleSheets){
+		CSSWrangler.prototype.getSheetsAsString = function(styleSheets){
+			var cssWrangler = this;
 			var styles = "";
 			if (typeof styleSheets.length === "number"){
-				for (var i = 0; i < styleSheets.length; i++){
-					styles += this.getSheetString(styleSheets[i]);
-				}
+				styleSheets.forEach(function(styleSheet){
+					styles += cssWrangler.getSheetAsString(styleSheet);
+				});
 			}
 			return styles;
 		};
@@ -960,18 +963,20 @@ window.pryntr = (function(){
 		* @param {String} [styles=""] The string of styles for recursion
 		* @return {String} The string of styles
 		*/
-		CSSWrangler.prototype.getSheetString = function(sheet, styles){
-			styles = typeof styles === "undefined"? "": styles;
+		CSSWrangler.prototype.getSheetAsString = function(sheet, styles){
+			var cssWrangler = this;
+			var cssRules;
+			styles = styles === undefined? "": styles;
 			if (typeof sheet.cssRules === "object" && sheet.cssRules !== null){
-				for (var i = 0; i < sheet.cssRules.length; i++){
-					var rule = sheet.cssRules[i];
+				cssRules = cssWrangler.toArray(sheet.cssRules);
+				cssRules.forEach(function(rule){
 					if (rule.type === 3){
-						styles = styles + this.getSheetString(rule.styleSheet, styles);
+						styles = styles + cssWrangler.getSheetAsString(rule.styleSheet, styles);
 					}
-					else if (typeof rule.selectorText !== "undefined"){
+					else if (rule.selectorText !== undefined){
 						styles = styles + "\n" + rule.cssText;
 					}
-				}
+				});
 			}
 			return styles;
 		};
@@ -986,7 +991,10 @@ window.pryntr = (function(){
 		* @return {Boolean} True if the key is a proper property name
 		*/
 		CSSWrangler.prototype.isValid = function(key, attrs){
-			return isNaN(parseInt(key)) && key.indexOf("webkit") < 0 && attrs.indexOf(key) < 0 && this.validProperties.indexOf(key) >= 0;
+			return this.validProperties.indexOf(key) >= 0;
+			// For not restricting to the SVG properties, use the below check
+			// Also, add other vendor prefix checks
+			// return isNaN(parseInt(key)) && key.indexOf("webkit") < 0 && attrs.indexOf(key) < 0;
 		};
 
 		/**
@@ -997,10 +1005,10 @@ window.pryntr = (function(){
 		CSSWrangler.prototype.getComputedStyleString = function(element){
 			var styleDict = document.defaultView.getComputedStyle(element);
 			var styleString = "";
-			var ctx = this;
-			var attrs = this.getAttributeList(element);
+			var cssWrangler = this;
+			var attrs = this.getElementAttributeList(element);
 			Object.keys(styleDict).forEach(function(key){
-				if (styleDict.hasOwnProperty(key) && ctx.isValid(key, attrs)){
+				if (styleDict.hasOwnProperty(key) && cssWrangler.isValid(key, attrs)){
 					styleString = styleString + key + ":" + styleDict[key] + ";";
 				}
 			});
@@ -1012,14 +1020,14 @@ window.pryntr = (function(){
 		* @param {Object} element The element whose attribute list is to be fetched
 		* @return {Array.<String>} The list of attributes that the element possesses
 		*/
-		CSSWrangler.prototype.getAttributeList = function(element){
+		CSSWrangler.prototype.getElementAttributeList = function(element){
 			var attrNames = [];
-			var attrs = element.attributes;
-			for (var i = 0; i < attrs.length; i++){
-				attrNames.push(attrs[i].nodeName);
-			}
+			var attrs = this.toArray(element.attributes);
+			attrs.forEach(function(attr){
+				attrNames.push(attr.nodeName);
+			});
 			return attrNames;
-		}
+		};
 
 		/**
 		* Compute the style of each node in the tree of the original element and add them as inline style to the clone peer
@@ -1029,12 +1037,13 @@ window.pryntr = (function(){
 		* @param {Object} clone The corresponding clone peer
 		*/
 		CSSWrangler.prototype.inlineStyleCloneElement = function(element, shadowPeer){
-			var eleChildren = element.children;
-			var shadowPeerChildren = shadowPeer.children;
+			var cssWrangler = this;
+			var eleChildren = this.toArray(element.children);
+			var shadowPeerChildren = this.toArray(shadowPeer.children);
 			shadowPeer.setAttribute("style", shadowPeer.getAttribute("style") + this.getComputedStyleString(element));
-			for (var i = 0; i < eleChildren.length; i++){
-				this.inlineStyleCloneElement(eleChildren[i], shadowPeerChildren[i]);
-			}
+			eleChildren.forEach(function(eleChild, i){
+				cssWrangler.inlineStyleCloneElement(eleChild, shadowPeerChildren[i]);
+			});
 		};
 
 
@@ -1042,7 +1051,7 @@ window.pryntr = (function(){
 			getWrangler: function(){
 				return new CSSWrangler();
 			}
-		}
+		};
 
 		return cssWrangler;
 
